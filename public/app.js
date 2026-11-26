@@ -356,33 +356,35 @@ async function admCTs(box, dep) {
     <div class="grid2">${field('n-sec', 'Seção', sel('n-sec', DEP[dep].secoes.map((s) => [s, nomeSecao(s)]), DEP[dep].secoes[0]))}${field('n-tipo', 'Óleo', sel('n-tipo', tipos))}</div>
     ${field('n-pr', 'Preço do óleo (R$/L)', tNum('n-pr', ''))}<button class="btn" id="n-add" style="width:100%">Adicionar</button>
     <h3>CTs cadastrados</h3>
-    ${lista.length ? `<div class="scroll"><table class="stack"><thead><tr><th>CT</th><th>Óleo</th><th>Seção</th><th class="n">R$/L</th><th></th></tr></thead><tbody>${lista.map((c) => `<tr><td>${esc(c.ct)}</td><td>${esc(OLEOS.find((o) => o.tipo === c.tipo)?.nome || c.tipo)}</td><td>${esc(nomeSecao(c.departamento))}</td><td class="n"><input data-ct="${esc(c.ct)}" data-v="${c.preco}" inputmode="decimal" value="${fmt(c.preco)}" aria-label="Preço do CT ${esc(c.ct)}"></td><td class="n"><button class="x" data-del="${esc(c.ct)}" aria-label="Remover CT ${esc(c.ct)}">✕</button></td></tr>`).join('')}</tbody></table></div>
+    ${lista.length ? `<div class="scroll"><table class="stack"><thead><tr><th>CT</th><th>Óleo</th><th>Seção</th><th class="n">R$/L</th><th></th></tr></thead><tbody>${lista.map((c) => `<tr><td>${esc(c.ct)}</td><td>${esc(OLEOS.find((o) => o.tipo === c.tipo)?.nome || c.tipo)}</td><td>${esc(nomeSecao(c.departamento))}</td><td class="n"><input data-ct="${esc(c.ct)}" data-tipo="${esc(c.tipo)}" data-v="${c.preco}" inputmode="decimal" value="${fmt(c.preco)}" aria-label="Preço do CT ${esc(c.ct)}"></td><td class="n"><button class="x" data-del="${esc(c.ct)}" data-tipo="${esc(c.tipo)}" aria-label="Remover CT ${esc(c.ct)}">✕</button></td></tr>`).join('')}</tbody></table></div>
       <button class="btn" id="sp" style="width:100%;margin-top:12px">Salvar preços</button>` : '<div class="empty">Nenhum CT cadastrado neste departamento.</div>'}
     <h3>Importar vários CTs</h3>
-    <p class="hint" style="font-size:14px;margin-top:-4px">Cole linhas do Excel com as colunas <b>CT; óleo; seção; preço</b>. Seção: Usinagem_de_Eixos, Usinagem_de_Fundidos_I ou Usinagem_de_Fundidos_II. CT que já existe é atualizado.</p>
-    ${field('imp', 'Linhas', '<textarea id="imp" rows="5" placeholder="01060061;Ecocool_2001;Usinagem_de_Eixos;37,70"></textarea>', 0)}
+    <p class="hint" style="font-size:14px;margin-top:-4px">Escolha o CSV exportado da lista do SharePoint, ou cole linhas do Excel com as colunas <b>CT; óleo; seção; preço</b>. CT que já existe é atualizado; preço vazio mantém o atual. Vale para todos os departamentos.</p>
+    ${field('imp-f', 'Arquivo CSV', '<input id="imp-f" type="file" accept=".csv,.txt,text/csv">', 0)}
+    ${field('imp', 'Ou cole as linhas', '<textarea id="imp" rows="5" placeholder="01060061;Ecocool_2001;Usinagem_de_Eixos;37,70"></textarea>', 0)}
     <button class="btn ghost" id="imp-b" style="width:100%">Importar</button><div id="imp-r"></div>`;
-  live([['n-ct', (v) => (!v.trim() ? 'Informe o CT.' : lista.some((c) => c.ct === v.trim()) ? 'Esse CT já está cadastrado.' : '')], ['n-sec', R.req('A seção')], ['n-tipo', R.req('O óleo')], ['n-pr', R.pos('O preço')]], 'n-add');
+  $('imp-f').onchange = async () => { const f = $('imp-f').files[0]; if (f) $('imp').value = await f.text(); };
+  live([['n-ct', (v) => (!v.trim() ? 'Informe o CT.' : lista.some((c) => c.ct === v.trim() && c.tipo === val('n-tipo')) ? 'Esse CT já está cadastrado para esse óleo.' : '')], ['n-sec', R.req('A seção')], ['n-tipo', R.req('O óleo')], ['n-pr', R.pos('O preço')]], 'n-add');
   const recarrega = () => { delete cache['cts' + dep]; admCTs(box, dep); };
   $('n-add').onclick = () => ocupado('n-add', 'Adicionando…', async () => {
     await api('/api/admin/cts', { method: 'POST', body: { ct: val('n-ct').trim(), departamento: val('n-sec'), tipo: val('n-tipo'), preco: num(val('n-pr')) } });
     recarrega(); toast('CT adicionado');
   });
   if ($('sp')) $('sp').onclick = () => ocupado('sp', 'Salvando…', async () => {
-    const mud = {};
-    box.querySelectorAll('[data-ct]').forEach((i) => { const x = num(i.value); if (!isFinite(x) || x < 0) throw new Error(`Preço inválido no CT ${i.dataset.ct}.`); if (x !== +i.dataset.v) mud[i.dataset.ct] = x; });
-    if (!Object.keys(mud).length) { toast('Nenhuma alteração'); $('sp').disabled = false; $('sp').textContent = 'Salvar preços'; return; }
+    const mud = [];
+    box.querySelectorAll('[data-ct]').forEach((i) => { const x = num(i.value); if (!isFinite(x) || x < 0) throw new Error(`Preço inválido no CT ${i.dataset.ct}.`); if (x !== +i.dataset.v) mud.push({ ct: i.dataset.ct, tipo: i.dataset.tipo, preco: x }); });
+    if (!mud.length) { toast('Nenhuma alteração'); $('sp').disabled = false; $('sp').textContent = 'Salvar preços'; return; }
     await api('/api/admin/cts', { method: 'PUT', body: { precos: mud } });
-    recarrega(); toast(`${Object.keys(mud).length} preço(s) atualizado(s)`);
+    recarrega(); toast(`${mud.length} preço(s) atualizado(s)`);
   });
   box.querySelectorAll('[data-del]').forEach((b) => (b.onclick = () => folha('Remover CT ' + b.dataset.del + '?', '<p>Os registros já feitos com esse CT continuam no histórico. Ele só deixa de aparecer para novos registros.</p><div class="row"><button class="btn ghost" data-close>Cancelar</button><button class="btn dang" id="rm">Remover</button></div>', () => {
-    $('rm').onclick = () => ocupado('rm', 'Removendo…', async () => { await api('/api/admin/cts/' + encodeURIComponent(b.dataset.del), { method: 'DELETE' }); layer.innerHTML = ''; recarrega(); toast('CT removido'); });
+    $('rm').onclick = () => ocupado('rm', 'Removendo…', async () => { await api('/api/admin/cts/' + encodeURIComponent(b.dataset.del) + '/' + encodeURIComponent(b.dataset.tipo), { method: 'DELETE' }); layer.innerHTML = ''; recarrega(); toast('CT removido'); });
   })));
   $('imp-b').onclick = () => ocupado('imp-b', 'Importando…', async () => {
     const r = await api('/api/admin/cts/importar', { method: 'POST', body: { linhas: val('imp') } });
-    delete cache['cts' + dep];
-    const msg = `${r.gravados} CT(s) gravado(s).` + (r.erros.length ? '\nNão importadas:\n' + r.erros.map((e) => `Linha ${e.linha}: ${e.msg}`).join('\n') : '');
-    if (!r.erros.length) { admCTs(box, dep).then(() => toast(`${r.gravados} CT(s) gravado(s)`)); return; }
+    for (const k of Object.keys(DEP)) delete cache['cts' + k];
+    const msg = `${r.gravados} CT(s) gravado(s)${r.repetidos ? `, ${r.repetidos} linha(s) repetida(s) ignorada(s)` : ''}.` + (r.erros.length ? '\nNão importadas:\n' + r.erros.map((e) => `Linha ${e.linha}: ${e.msg}`).join('\n') : '');
+    if (!r.erros.length) { admCTs(box, dep).then(() => toast(msg)); return; }
     $('imp-r').innerHTML = `<pre class="res">${esc(msg)}</pre>`; $('imp-b').disabled = false; $('imp-b').textContent = 'Importar';
   });
 }

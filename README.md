@@ -47,7 +47,7 @@ O banco D1 `central-dados` já existe e já tem as tabelas. Se um dia uma nova m
 
 Entre em **Admin**:
 
-1. Cadastre os CTs, um a um ou colando do Excel (`CT;óleo;seção;preço`).
+1. Cadastre os CTs: um a um, escolhendo o CSV exportado da lista "CTs e Preços II" do SharePoint, ou colando do Excel (`CT;óleo;seção;preço`). Um mesmo CT pode ter mais de um óleo (ex.: emulsão e MQL).
 2. Preencha os preços da Central de Fluidos.
 3. Cadastre as máquinas da tela Informações.
 

@@ -86,11 +86,11 @@ async function validaMI(env, b, atual) {
   if (!o.deps.includes(dep)) falha(400, `${o.nome} não é usado em ${DEPARTAMENTOS[dep].nome}.`);
   const ct = texto(b.ct, 30);
   if (!ct) falha(400, 'O CT não pode ficar vazio.');
-  const cad = await env.DB.prepare('SELECT * FROM cts WHERE ct = ?').bind(ct).first();
+  const cad = await env.DB.prepare('SELECT * FROM cts WHERE ct = ? AND tipo = ?').bind(ct, o.tipo).first();
   const mesmoCT = atual && atual.ct === ct;
   if (!mesmoCT) {
-    if (!cad) falha(400, `O CT ${ct} não está cadastrado.`);
-    if (cad.tipo !== o.tipo || !DEPARTAMENTOS[dep].secoes.includes(cad.departamento)) falha(400, `O CT ${ct} não é de ${o.nome} em ${DEPARTAMENTOS[dep].nome}.`);
+    if (!cad) falha(400, `O CT ${ct} não está cadastrado para ${o.nome}.`);
+    if (!DEPARTAMENTOS[dep].secoes.includes(cad.departamento)) falha(400, `O CT ${ct} não é de ${DEPARTAMENTOS[dep].nome}.`);
   }
   const v = {
     tipo: o.id, departamento: dep, data: data(b.data), ct,
@@ -139,6 +139,23 @@ const csv = (nome, cab, linhas) =>
   });
 
 // ---------- importação de CTs ----------
+// Lê uma linha de CSV com ; , ou tab como separador e aspas opcionais.
+function celulas(linha, sep) {
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < linha.length; i++) {
+    const c = linha[i];
+    if (q) { if (c === '"' && linha[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === sep) { out.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur.trim());
+  return out;
+}
+function separador(linha) {
+  const conta = (c) => linha.split(c).length;
+  return ['\t', ';', ','].reduce((a, b) => (conta(b) > conta(a) ? b : a));
+}
 const semAcento = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
 function tipoDe(s) {
   const k = semAcento(s);
@@ -311,21 +328,35 @@ async function admin(req, env, seg, m) {
 
   if (seg[0] === 'cts') {
     if (m === 'POST' && seg[1] === 'importar') {
+      // Aceita "CT;óleo;seção;preço" ou um CSV com cabeçalho (ex.: exportado do SharePoint).
+      // Preço vazio mantém o preço que o CT já tinha.
       const { linhas } = await corpo(req);
-      const res = { gravados: 0, erros: [] };
-      const stmts = [];
-      String(linhas || '').split(/\r?\n/).forEach((l, i) => {
-        if (!l.trim()) return;
-        const c = l.split(/\t|;/).map((x) => x.trim());
-        if (i === 0 && /^ct$/i.test(c[0])) return; // cabeçalho
-        const [ct, t, d, pr] = c;
-        const tipo = tipoDe(t || ''), dep = secaoDe(d || ''), preco = pr === undefined || pr === '' ? 0 : num(pr);
+      const res = { gravados: 0, repetidos: 0, erros: [] };
+      const ls = String(linhas || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+      const primeira = ls.find((l) => l.trim()) || '';
+      const sep = separador(primeira);
+      let col = { ct: 0, tipo: 1, dep: 2, preco: 3 }, inicio = 0;
+      const cab = celulas(primeira, sep).map((c) => semAcento(c));
+      if (cab.includes('ct')) {
+        const acha = (re) => cab.findIndex((c) => re.test(c));
+        col = { ct: cab.indexOf('ct'), tipo: acha(/tipo|oleo/), dep: acha(/departamento|secao/), preco: acha(/preco/) };
+        inicio = ls.indexOf(primeira) + 1;
+      }
+      const vistos = new Set(), stmts = [];
+      ls.forEach((l, i) => {
+        if (i < inicio || !l.trim()) return;
+        const c = celulas(l, sep), pega = (k) => (col[k] >= 0 ? c[col[k]] ?? '' : '');
+        const ct = texto(pega('ct'), 30), t = pega('tipo'), d = pega('dep'), pr = pega('preco');
+        const tipo = tipoDe(t), dep = secaoDe(d), preco = pr === '' ? null : num(pr);
         if (!ct) return res.erros.push({ linha: i + 1, msg: 'CT vazio' });
-        if (!tipo) return res.erros.push({ linha: i + 1, msg: `Tipo de óleo "${t || ''}" não reconhecido` });
-        if (!dep) return res.erros.push({ linha: i + 1, msg: `Departamento "${d || ''}" não reconhecido` });
-        if (isNaN(preco) || preco < 0) return res.erros.push({ linha: i + 1, msg: `Preço "${pr}" inválido` });
-        stmts.push(env.DB.prepare(`INSERT INTO cts (ct, tipo, departamento, preco) VALUES (?,?,?,?)
-          ON CONFLICT(ct) DO UPDATE SET tipo=excluded.tipo, departamento=excluded.departamento, preco=excluded.preco`).bind(texto(ct, 30), tipo, dep, preco));
+        if (!tipo) return res.erros.push({ linha: i + 1, msg: `Tipo de óleo "${t}" não reconhecido` });
+        if (!dep) return res.erros.push({ linha: i + 1, msg: `Departamento "${d}" não reconhecido` });
+        if (preco !== null && (isNaN(preco) || preco < 0)) return res.erros.push({ linha: i + 1, msg: `Preço "${pr}" inválido` });
+        const k = ct + '|' + tipo;
+        if (vistos.has(k)) { res.repetidos++; return; }
+        vistos.add(k);
+        stmts.push(env.DB.prepare(`INSERT INTO cts (ct, tipo, departamento, preco) VALUES (?,?,?,COALESCE(?,0))
+          ON CONFLICT(ct, tipo) DO UPDATE SET departamento = excluded.departamento, preco = COALESCE(?, cts.preco)`).bind(ct, tipo, dep, preco, preco));
       });
       if (stmts.length) await env.DB.batch(stmts);
       res.gravados = stmts.length;
@@ -338,19 +369,19 @@ async function admin(req, env, seg, m) {
       const tipo = tipoDe(b.tipo || ''); if (!tipo) falha(400, 'Tipo de óleo inválido.');
       const dep = secaoDe(b.departamento || ''); if (!dep) falha(400, 'Departamento inválido.');
       const preco = naoNegativo('O preço', b.preco);
-      if (await env.DB.prepare('SELECT 1 FROM cts WHERE ct = ?').bind(ct).first()) falha(409, 'Esse CT já está cadastrado.');
+      if (await env.DB.prepare('SELECT 1 FROM cts WHERE ct = ? AND tipo = ?').bind(ct, tipo).first()) falha(409, 'Esse CT já está cadastrado para esse óleo.');
       await env.DB.prepare('INSERT INTO cts (ct, tipo, departamento, preco) VALUES (?,?,?,?)').bind(ct, tipo, dep, preco).run();
       return json({ ok: true }, 201);
     }
     if (m === 'PUT' && seg.length === 1) {
-      // vários preços de uma vez: { precos: { "CT": 12.3 } }
+      // vários preços de uma vez: { precos: [{ ct, tipo, preco }] }
       const { precos } = await corpo(req);
-      const stmts = Object.entries(precos || {}).map(([ct, pr]) => env.DB.prepare('UPDATE cts SET preco = ? WHERE ct = ?').bind(naoNegativo(`O preço do CT ${ct}`, pr), ct));
+      const stmts = (Array.isArray(precos) ? precos : []).map((x) => env.DB.prepare('UPDATE cts SET preco = ? WHERE ct = ? AND tipo = ?').bind(naoNegativo(`O preço do CT ${x.ct}`, x.preco), String(x.ct), String(x.tipo)));
       if (stmts.length) await env.DB.batch(stmts);
       return json({ atualizados: stmts.length });
     }
-    if (m === 'DELETE' && seg.length === 2) {
-      await env.DB.prepare('DELETE FROM cts WHERE ct = ?').bind(seg[1]).run();
+    if (m === 'DELETE' && seg.length === 3) {
+      await env.DB.prepare('DELETE FROM cts WHERE ct = ? AND tipo = ?').bind(seg[1], seg[2]).run();
       return json({ ok: true });
     }
   }
