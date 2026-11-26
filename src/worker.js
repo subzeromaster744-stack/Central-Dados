@@ -66,9 +66,9 @@ function responsavel(v) {
 }
 
 // filtros comuns de histórico
-function filtros(url, cols) {
+function filtros(url, cols, u) {
   const where = ['excluido_em IS NULL'], args = [];
-  const dep = exigeDep(url.searchParams.get('dep'));
+  const dep = podeDep(u, url.searchParams.get('dep'));
   where.push('departamento = ?'); args.push(dep);
   const de = url.searchParams.get('de'), ate = url.searchParams.get('ate');
   if (de && dataValida(de)) { where.push('data >= ?'); args.push(de); }
@@ -167,26 +167,107 @@ function secaoDe(s) {
   return Object.values(DEPARTAMENTOS).flatMap((d) => d.secoes).find((x) => semAcento(x) === k);
 }
 
+// ---------- usuários e sessões ----------
+const ITER = 20000; // PBKDF2-SHA256; mantém o login leve para o limite de CPU do Worker
+const b64 = (u8) => btoa(String.fromCharCode(...u8));
+const deB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function derivar(senha, sal, iter) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(senha), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: sal, iterations: iter }, k, 256));
+}
+async function hashSenha(senha) {
+  const sal = crypto.getRandomValues(new Uint8Array(16));
+  return `pbkdf2$${ITER}$${b64(sal)}$${b64(await derivar(senha, sal, ITER))}`;
+}
+async function confereSenha(senha, guardada) {
+  const [, it, sal, h] = String(guardada).split('$');
+  if (!h) return false;
+  const calc = await derivar(senha, deB64(sal), +it), esp = deB64(h);
+  return calc.length === esp.length && crypto.subtle.timingSafeEqual(calc, esp);
+}
+const sha256 = async (s) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+function senhaNova(v) {
+  const s = String(v ?? '');
+  if (s.length < 4) falha(400, 'A senha precisa ter pelo menos 4 caracteres.');
+  if (s.length > 100) falha(400, 'Senha longa demais.');
+  return s;
+}
+const publico = (u) => ({ id: u.id, login: u.login, nome: u.nome, departamento: u.departamento, turno: u.turno, admin: !!u.admin, ativo: !!u.ativo, trocar_senha: !!u.trocar_senha });
+async function abreSessao(env, u) {
+  const token = b64(crypto.getRandomValues(new Uint8Array(32))).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' }[c]));
+  const exp = new Date(Date.now() + 90 * 864e5).toISOString();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM sessoes WHERE expira_em < ?').bind(agora()),
+    env.DB.prepare('INSERT INTO sessoes (token, usuario_id, criado_em, expira_em) VALUES (?,?,?,?)').bind(await sha256(token), u.id, agora(), exp),
+  ]);
+  return token;
+}
+async function usuarioDaSessao(req, env) {
+  const t = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!t) return null;
+  return env.DB.prepare(`SELECT u.* FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
+    WHERE s.token = ? AND s.expira_em > ? AND u.ativo = 1`).bind(await sha256(t), agora()).first();
+}
+// quem não é admin só mexe no próprio departamento
+function podeDep(u, dep) {
+  exigeDep(dep);
+  if (!u.admin && dep !== u.departamento) falha(403, 'Você não tem acesso a esse departamento.');
+  return dep;
+}
+
 // ---------- rotas ----------
 async function api(req, env, url) {
   const p = url.pathname.replace(/\/+$/, '');
   const m = req.method;
   const seg = p.split('/').slice(2).map(decodeURIComponent); // depois de /api
 
-  if (p === '/api/config') return json({ precisaChave: !!env.APP_PASSWORD, adminAtivo: !!env.ADMIN_PASSWORD, hoje: hojeBR() });
+  if (p === '/api/config') return json({ hoje: hojeBR() });
 
-  if (env.APP_PASSWORD && !(await igual(req.headers.get('x-app-key') || '', env.APP_PASSWORD))) falha(401, 'Senha de acesso inválida.');
+  // ---- login ----
+  if (p === '/api/login' && m === 'POST') {
+    const b = await corpo(req);
+    const login = texto(b.login, 60).toLowerCase(), senha = String(b.senha ?? '');
+    if (!login || !senha) falha(400, 'Informe usuário e senha.');
+    let u = await env.DB.prepare('SELECT * FROM usuarios WHERE login = ?').bind(login).first();
+    // "admin" + Secret ADMIN_PASSWORD sempre entra (primeiro acesso e recuperação)
+    const mestre = login === 'admin' && env.ADMIN_PASSWORD && (await igual(senha, env.ADMIN_PASSWORD));
+    if (mestre && !u) {
+      u = await env.DB.prepare(`INSERT INTO usuarios (login, nome, departamento, turno, admin, senha, trocar_senha, criado_em)
+        VALUES ('admin','Administrador','Eixos','Turno Normal',1,?,0,?) RETURNING *`).bind(await hashSenha(senha), agora()).first();
+    }
+    if (mestre && u && !u.admin) falha(401, 'Usuário ou senha incorretos.');
+    if (!u || (!mestre && !(await confereSenha(senha, u.senha)))) falha(401, 'Usuário ou senha incorretos.');
+    if (!u.ativo && !mestre) falha(403, 'Esse usuário está desativado. Fale com o admin.');
+    if (mestre && !u.ativo) await env.DB.prepare('UPDATE usuarios SET ativo = 1 WHERE id = ?').bind(u.id).run();
+    return json({ token: await abreSessao(env, u), usuario: publico(u) });
+  }
+
+  const u = await usuarioDaSessao(req, env);
+  if (!u) falha(401, 'Entre com seu usuário e senha.');
+
+  if (p === '/api/logout' && m === 'POST') {
+    const t = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+    await env.DB.prepare('DELETE FROM sessoes WHERE token = ?').bind(await sha256(t)).run();
+    return json({ ok: true });
+  }
+  if (p === '/api/me' && m === 'GET') return json(publico(u));
+  if (p === '/api/me/senha' && m === 'PUT') {
+    const b = await corpo(req);
+    if (!u.trocar_senha && !(await confereSenha(String(b.atual ?? ''), u.senha))) falha(400, 'A senha atual está incorreta.');
+    const nova = senhaNova(b.nova);
+    await env.DB.prepare('UPDATE usuarios SET senha = ?, trocar_senha = 0, alterado_em = ? WHERE id = ?').bind(await hashSenha(nova), agora(), u.id).run();
+    return json({ ok: true });
+  }
 
   // ---- admin ----
   if (seg[0] === 'admin') {
-    if (!env.ADMIN_PASSWORD) falha(403, 'A área de admin está desligada. Configure o Secret ADMIN_PASSWORD na Cloudflare.');
-    if (!(await igual(req.headers.get('x-admin-password') || '', env.ADMIN_PASSWORD))) falha(401, 'Senha de admin incorreta.');
-    return admin(req, env, seg.slice(1), m);
+    if (!u.admin) falha(403, 'Só o admin pode fazer isso.');
+    return admin(req, env, seg.slice(1), m, u);
   }
 
   // ---- leitura geral ----
   if (m === 'GET' && p === '/api/resumo') {
-    const dep = exigeDep(url.searchParams.get('dep'));
+    const dep = podeDep(u, url.searchParams.get('dep'));
     const mi = await env.DB.prepare(`SELECT tipo, data, ct, concentracao FROM (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY tipo ORDER BY data DESC, id DESC) AS n
         FROM registros_mi WHERE departamento = ? AND excluido_em IS NULL) WHERE n = 1`).bind(dep).all();
@@ -200,14 +281,14 @@ async function api(req, env, url) {
   }
 
   if (m === 'GET' && p === '/api/cts') {
-    const dep = exigeDep(url.searchParams.get('dep'));
+    const dep = podeDep(u, url.searchParams.get('dep'));
     const s = DEPARTAMENTOS[dep].secoes;
     const r = await env.DB.prepare(`SELECT * FROM cts WHERE departamento IN (${s.map(() => '?').join(',')}) ORDER BY tipo, ct`).bind(...s).all();
     return json(r.results);
   }
 
   if (m === 'GET' && p === '/api/precos') {
-    const dep = exigeDep(url.searchParams.get('dep'));
+    const dep = podeDep(u, url.searchParams.get('dep'));
     const r = await env.DB.prepare('SELECT descricao, preco FROM precos_cf WHERE departamento = ?').bind(dep).all();
     return json(Object.fromEntries(r.results.map((x) => [x.descricao, x.preco])));
   }
@@ -222,7 +303,7 @@ async function api(req, env, url) {
   // ---- máquinas individuais ----
   if (seg[0] === 'mi') {
     if (m === 'GET' && seg.length === 1) {
-      const f = filtros(url, ['ct', 'responsavel']);
+      const f = filtros(url, ['ct', 'responsavel'], u);
       const tipo = url.searchParams.get('tipo');
       if (!oleoPorId(tipo)) falha(400, 'Tipo de óleo inválido.');
       f.where.push('tipo = ?'); f.args.push(tipo);
@@ -236,15 +317,17 @@ async function api(req, env, url) {
     }
     if (m === 'POST' && seg.length === 1) {
       const b = await corpo(req);
+      podeDep(u, b.departamento);
       const v = await validaMI(env, b);
       const r = await env.DB.prepare(`INSERT INTO registros_mi (tipo, departamento, data, ct, concentracao, ph, reposicao, preco, turno, responsavel, criado_em)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.tipo, v.departamento, v.data, v.ct, v.concentracao, v.ph, v.reposicao, v.preco, v.turno, responsavel(b.responsavel), agora()).first();
+        VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.tipo, v.departamento, v.data, v.ct, v.concentracao, v.ph, v.reposicao, v.preco, v.turno, u.nome, agora()).first();
       return json(r, 201);
     }
     const id = +seg[1];
     if (!Number.isInteger(id)) falha(404, 'Rota não encontrada.');
     const atual = await env.DB.prepare('SELECT * FROM registros_mi WHERE id = ?').bind(id).first();
     if (!atual) falha(404, 'Registro não encontrado.');
+    podeDep(u, atual.departamento);
     if (m === 'PUT' && seg.length === 2) {
       if (atual.excluido_em) falha(409, 'Esse registro foi excluído.');
       const v = await validaMI(env, { ...(await corpo(req)), tipo: atual.tipo, departamento: atual.departamento }, atual);
@@ -265,7 +348,7 @@ async function api(req, env, url) {
   // ---- central de fluidos ----
   if (seg[0] === 'cf') {
     if (m === 'GET' && seg.length === 1) {
-      const f = filtros(url, ['descricao', 'produto', 'observacoes', 'responsavel']);
+      const f = filtros(url, ['descricao', 'produto', 'observacoes', 'responsavel'], u);
       const w = f.where.join(' AND ');
       const lim = Math.min(+url.searchParams.get('limite') || 200, 1000);
       const [rows, tot] = await Promise.all([
@@ -276,15 +359,17 @@ async function api(req, env, url) {
     }
     if (m === 'POST' && seg.length === 1) {
       const b = await corpo(req);
+      podeDep(u, b.departamento);
       const v = await validaCF(env, b);
       const r = await env.DB.prepare(`INSERT INTO registros_cf (departamento, data, turno, ph, concentracao, produto, descricao, consumo, preco, observacoes, responsavel, criado_em)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.departamento, v.data, v.turno, v.ph, v.concentracao, v.produto, v.descricao, v.consumo, v.preco, v.observacoes, responsavel(b.responsavel), agora()).first();
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.departamento, v.data, v.turno, v.ph, v.concentracao, v.produto, v.descricao, v.consumo, v.preco, v.observacoes, u.nome, agora()).first();
       return json(r, 201);
     }
     const id = +seg[1];
     if (!Number.isInteger(id)) falha(404, 'Rota não encontrada.');
     const atual = await env.DB.prepare('SELECT * FROM registros_cf WHERE id = ?').bind(id).first();
     if (!atual) falha(404, 'Registro não encontrado.');
+    podeDep(u, atual.departamento);
     if (m === 'PUT' && seg.length === 2) {
       if (atual.excluido_em) falha(409, 'Esse registro foi excluído.');
       const v = await validaCF(env, { ...(await corpo(req)), departamento: atual.departamento }, atual);
@@ -304,7 +389,7 @@ async function api(req, env, url) {
 
   // ---- exportação para Excel ----
   if (m === 'GET' && p === '/api/exportar/mi.csv') {
-    const f = filtros(url, ['ct', 'responsavel']);
+    const f = filtros(url, ['ct', 'responsavel'], u);
     const tipo = url.searchParams.get('tipo');
     if (tipo) { if (!oleoPorId(tipo)) falha(400, 'Tipo de óleo inválido.'); f.where.push('tipo = ?'); f.args.push(tipo); }
     const r = await env.DB.prepare(`SELECT * FROM registros_mi WHERE ${f.where.join(' AND ')} ORDER BY data, id`).bind(...f.args).all();
@@ -313,7 +398,7 @@ async function api(req, env, url) {
       r.results.map((x) => [x.id, x.data, oleoPorId(x.tipo)?.nome || x.tipo, x.ct, x.concentracao, x.ph, x.reposicao, x.preco, +(x.reposicao * x.preco).toFixed(2), x.turno, x.responsavel, DEPARTAMENTOS[x.departamento]?.nome, x.criado_em]));
   }
   if (m === 'GET' && p === '/api/exportar/cf.csv') {
-    const f = filtros(url, ['descricao', 'produto', 'observacoes', 'responsavel']);
+    const f = filtros(url, ['descricao', 'produto', 'observacoes', 'responsavel'], u);
     const r = await env.DB.prepare(`SELECT * FROM registros_cf WHERE ${f.where.join(' AND ')} ORDER BY data, id`).bind(...f.args).all();
     return csv(`central-de-fluidos-${f.dep}.csv`,
       ['ID', 'Data', 'Turno', 'pH', 'Concentração (%)', 'Produto', 'Descrição', 'Consumo', 'Preço (R$)', 'Custo (R$)', 'Observações', 'Responsável', 'Departamento', 'Criado em'],
@@ -323,8 +408,47 @@ async function api(req, env, url) {
   falha(404, 'Rota não encontrada.');
 }
 
-async function admin(req, env, seg, m) {
-  if (seg[0] === 'entrar' && m === 'POST') return json({ ok: true });
+async function admin(req, env, seg, m, eu) {
+  // ---- usuários ----
+  if (seg[0] === 'usuarios') {
+    const dados = (b) => {
+      const nome = texto(b.nome, 80); if (!nome) falha(400, 'Informe o nome.');
+      return { nome, departamento: exigeDep(b.departamento), turno: turno(b.turno), admin: b.admin ? 1 : 0 };
+    };
+    if (m === 'GET' && seg.length === 1) {
+      const r = await env.DB.prepare('SELECT * FROM usuarios ORDER BY ativo DESC, nome COLLATE NOCASE').all();
+      return json(r.results.map(publico));
+    }
+    if (m === 'POST' && seg.length === 1) {
+      const b = await corpo(req), v = dados(b);
+      const login = texto(b.login, 60).toLowerCase();
+      if (!/^[a-z0-9._-]{2,60}$/.test(login)) falha(400, 'O usuário deve ter de 2 a 60 letras, números, ponto, hífen ou sublinhado, sem espaços.');
+      if (await env.DB.prepare('SELECT 1 FROM usuarios WHERE login = ?').bind(login).first()) falha(409, 'Já existe um usuário com esse login.');
+      const r = await env.DB.prepare(`INSERT INTO usuarios (login, nome, departamento, turno, admin, senha, trocar_senha, criado_em) VALUES (?,?,?,?,?,?,1,?) RETURNING *`)
+        .bind(login, v.nome, v.departamento, v.turno, v.admin, await hashSenha(senhaNova(b.senha)), agora()).first();
+      return json(publico(r), 201);
+    }
+    const id = +seg[1];
+    const alvo = Number.isInteger(id) && (await env.DB.prepare('SELECT * FROM usuarios WHERE id = ?').bind(id).first());
+    if (!alvo) falha(404, 'Usuário não encontrado.');
+    if (m === 'PUT' && seg.length === 2) {
+      const b = await corpo(req), v = dados(b);
+      const ativo = b.ativo === false ? 0 : 1;
+      if (alvo.id === eu.id && (!v.admin || !ativo)) falha(400, 'Você não pode tirar o seu próprio acesso de admin.');
+      const r = await env.DB.prepare('UPDATE usuarios SET nome=?, departamento=?, turno=?, admin=?, ativo=?, alterado_em=? WHERE id=? RETURNING *')
+        .bind(v.nome, v.departamento, v.turno, v.admin, ativo, agora(), id).first();
+      if (!ativo) await env.DB.prepare('DELETE FROM sessoes WHERE usuario_id = ?').bind(id).run();
+      return json(publico(r));
+    }
+    if (m === 'POST' && seg[2] === 'senha') {
+      const { senha } = await corpo(req);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE usuarios SET senha = ?, trocar_senha = 1, alterado_em = ? WHERE id = ?').bind(await hashSenha(senhaNova(senha)), agora(), id),
+        env.DB.prepare('DELETE FROM sessoes WHERE usuario_id = ?').bind(id),
+      ]);
+      return json({ ok: true });
+    }
+  }
 
   if (seg[0] === 'cts') {
     if (m === 'POST' && seg[1] === 'importar') {

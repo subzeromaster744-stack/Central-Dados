@@ -6,8 +6,8 @@ Ele roda na Cloudflare (Worker com arquivos estáticos) e guarda os dados no ban
 
 ## O que tem
 
-- **Perfil:** cada pessoa informa nome, departamento e turno uma vez, e isso fica salvo no aparelho. Cada um vê só as telas do seu departamento.
-- **Admin:** quem entra com a senha de admin (no perfil) vê as telas de todos os departamentos, separadas, e a área de cadastro.
+- **Usuários com senha:** o admin cria cada pessoa com usuário, senha provisória, departamento e turno (Admin › Usuários). No primeiro acesso a pessoa cria a própria senha; depois pode trocar em "Minha conta". Se esquecer, o admin redefine. Cada um vê só as telas do seu departamento; o admin vê todos, separados.
+- **Primeiro acesso do admin:** usuário `admin` com a senha do Secret `ADMIN_PASSWORD`. Essa combinação sempre funciona, para recuperar o acesso se a senha do admin for esquecida.
 - **Central de Fluidos:** 3 etapas (data e turno → pH e concentração → produto e consumo), com o custo calculado na hora.
 - **Máquinas individuais:** uma tela para os 6 óleos (6002, 2001, Houghto 5089, MQL, Diagrind 535, Microcut 515). O preço vem do CT cadastrado.
 - **Histórico:**
@@ -38,8 +38,7 @@ wrangler.jsonc configuração da Cloudflare
 1. Cloudflare → **Workers & Pages** → **Create** → **Import a repository** → escolha `Central-Dados`.
    O nome do Worker deve ser `central-dados`, e o comando de deploy fica o padrão (`npx wrangler deploy`).
 2. No Worker → **Settings** → **Variables and Secrets**, crie os Secrets:
-   - `ADMIN_PASSWORD`: senha da área de admin. Obrigatório para o admin funcionar.
-   - `APP_PASSWORD`: opcional. Se existir, todos precisam digitar essa senha uma vez para usar o app.
+   - `ADMIN_PASSWORD`: senha do usuário `admin`, usada no primeiro acesso e para recuperar o acesso.
 3. A partir daí, cada push na `main` publica sozinho.
 
 O banco D1 `central-dados` já existe e já tem as tabelas. Se um dia uma nova migração for adicionada, rode `npm run migrar`.
@@ -65,4 +64,4 @@ npm run dev
 
 ## Segurança
 
-Qualquer pessoa com o link pode registrar, a não ser que `APP_PASSWORD` esteja configurado. Para restringir a e-mails da empresa, dá para colocar o app atrás do **Cloudflare Access** (Zero Trust → Access → Applications), sem mudar o código.
+Todas as telas e a API exigem login. Senhas são guardadas com PBKDF2 (nunca em texto). Quem não é admin só lê e grava no próprio departamento, e isso é conferido no servidor.

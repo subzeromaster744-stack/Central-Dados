@@ -22,35 +22,32 @@ const quando = (s) => {
 };
 
 let CFG = { hoje: new Date().toISOString().slice(0, 10) };
-let ME = store.get('cd-perfil'); // { nome, dep, turno }
+let ME = null; // { id, login, nome, dep, turno, admin, trocar }
 let view = { v: 'menu' }, pilha = [], cfD = null;
 const cache = {};
 const app = $('app'), ttl = $('ttl'), back = $('back'), layer = $('layer'), meBtn = $('me');
-try { const a = sessionStorage.getItem('cd-admin'); if (a && !localStorage.getItem('cd-admin')) localStorage.setItem('cd-admin', a); sessionStorage.removeItem('cd-admin'); } catch {}
-const isAdmin = () => !!store.get('cd-admin');
+try { ['cd-perfil', 'cd-admin', 'cd-chave'].forEach((k) => localStorage.removeItem(k)); sessionStorage.removeItem('cd-admin'); } catch {}
+const isAdmin = () => !!ME?.admin;
+const deUsuario = (u) => ({ id: u.id, login: u.login, nome: u.nome, dep: u.departamento, turno: u.turno, admin: u.admin, trocar: u.trocar_senha });
 
 // Cor de cada tela, para reconhecer de relance
 const COR = { cf: '#0e7490', 6002: '#2456b8', 2001: '#6d28d9', houghto: '#c2410c', mql: '#475569', diagrind: '#a16207', microcut: '#15803d' };
 const gota = (k) => `<span class="gota" style="--c:${COR[k] || '#2456b8'}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2.6c-3.4 4.5-7 8.4-7 12.1a7 7 0 0 0 14 0c0-3.7-3.6-7.6-7-12.1z" fill="currentColor"/><path d="M8.6 15.2a3.4 3.4 0 0 0 3.4 3.3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" opacity=".85"/></svg></span>`;
 
 // ---------- API ----------
+const authH = () => { const t = store.get('cd-token'); return t ? { authorization: 'Bearer ' + t } : {}; };
 async function api(path, { method = 'GET', body } = {}) {
-  const h = { 'content-type': 'application/json' };
-  const k = store.get('cd-chave'); if (k) h['x-app-key'] = k;
-  const a = store.get('cd-admin'); if (a && path.startsWith('/api/admin')) h['x-admin-password'] = a;
   let res;
-  try { res = await fetch(path, { method, headers: h, body: body ? JSON.stringify(body) : undefined }); }
+  try { res = await fetch(path, { method, headers: { 'content-type': 'application/json', ...authH() }, body: body ? JSON.stringify(body) : undefined }); }
   catch { throw new Error('Sem conexão. Verifique a internet e tente de novo.'); }
   const d = await res.json().catch(() => ({}));
-  if (res.status === 401 && !path.startsWith('/api/admin')) { store.set('cd-chave', null); telaChave(d.erro); throw new Error(d.erro || 'Acesso negado.'); }
-  if (res.status === 401 && path.startsWith('/api/admin')) store.set('cd-admin', null);
+  if (res.status === 401 && path !== '/api/login') { store.set('cd-token', null); ME = null; vLogin(d.erro); throw new Error(d.erro || 'Entre de novo.'); }
   if (!res.ok) throw new Error(d.erro || 'Falha ao falar com o servidor.');
   return d;
 }
 async function baixar(path, nome) {
-  const h = {}; const k = store.get('cd-chave'); if (k) h['x-app-key'] = k;
   try {
-    const res = await fetch(path, { headers: h });
+    const res = await fetch(path, { headers: authH() });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).erro || 'Falha ao exportar.');
     const url = URL.createObjectURL(await res.blob());
     const a = document.createElement('a'); a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
@@ -73,14 +70,16 @@ const depDaTela = (o) => {
 function go(v, empilha = true) { if (empilha) pilha.push(view); view = v; app.dataset.h = ''; render(); window.scrollTo(0, 0); }
 back.onclick = () => { layer.innerHTML = ''; view = pilha.pop() || { v: 'menu' }; app.dataset.h = ''; render(); };
 const home = () => { pilha = []; go({ v: 'menu' }, false); };
-meBtn.onclick = () => go({ v: 'perfil' });
+meBtn.onclick = () => go({ v: 'conta' });
 function titulo(t, sub) { ttl.innerHTML = esc(t) + (sub ? '<small>' + esc(sub) + '</small>' : ''); }
 async function render() {
   document.body.classList.toggle('largo', view.v === 'info' || view.v === 'hist');
-  back.hidden = view.v === 'menu' || !ME;
-  meBtn.hidden = !ME || view.v === 'perfil';
-  if (ME) meBtn.innerHTML = `<span class="av">${esc(ME.nome.trim()[0] || '?').toUpperCase()}</span><span class="mt">${esc(ME.nome.split(' ')[0])}${isAdmin() ? ' · admin' : ''}</span>`;
-  const v = { menu: vMenu, perfil: vPerfil, cf: vCF, oil: vOil, ok: vOk, hist: vHist, admin: vAdmin, info: vInfo }[view.v];
+  if (!ME) return vLogin();
+  if (ME.trocar && view.v !== 'conta') { view = { v: 'conta' }; pilha = []; }
+  back.hidden = view.v === 'menu' || (ME.trocar && view.v === 'conta');
+  meBtn.hidden = view.v === 'conta';
+  meBtn.innerHTML = `<span class="av">${esc(ME.nome.trim()[0] || '?').toUpperCase()}</span><span class="mt">${esc(ME.nome.split(' ')[0])}${isAdmin() ? ' · admin' : ''}</span>`;
+  const v = { menu: vMenu, conta: vConta, cf: vCF, oil: vOil, ok: vOk, hist: vHist, admin: vAdmin, info: vInfo }[view.v] || vMenu;
   try { await v(); } catch (e) { app.innerHTML = `<div class="empty">${esc(e.message)}</div><div class="row mt"><button class="btn ghost" id="tenta">Tentar de novo</button></div>`; $('tenta').onclick = render; }
 }
 
@@ -134,87 +133,79 @@ function statusFaixa(id, faixa, txt, un = '') {
   el.innerHTML = `Faixa da máquina: ${esc(txt)}${un} ${st}`;
 }
 
-// ---------- telas de entrada ----------
-async function telaChave(msg) {
-  titulo('Qualidade do óleo', 'Acesso');
-  back.hidden = true; meBtn.hidden = true;
-  app.innerHTML = `<div class="card pad"><h2>Senha de acesso</h2><p class="hint" style="font-size:15px">Peça a senha ao responsável pelo app.</p>${field('k', 'Senha', '<input id="k" type="password" autocomplete="current-password">')}<div class="err" style="color:var(--red);font-weight:600;min-height:20px">${esc(msg || '')}</div><button class="btn" id="kb" style="width:100%">Entrar</button></div>`;
-  const ir = () => { store.set('cd-chave', val('k')); limpaCache(); render(); };
-  $('kb').onclick = ir; $('k').onkeydown = (e) => e.key === 'Enter' && ir(); $('k').focus();
-}
-function vPerfil() {
-  titulo(ME ? 'Seu perfil' : 'Bem-vindo', ME ? 'Usado em todos os seus registros' : 'Qualidade do óleo');
-  const p = ME || { nome: '', dep: '', turno: '' };
-  app.innerHTML = `<div class="card pad">${ME ? '' : '<p style="margin-top:0">Antes de começar, diga quem você é. Fica salvo neste aparelho.</p>'}
-    ${field('p-nome', 'Seu nome', `<input id="p-nome" autocomplete="name" maxlength="80" value="${esc(p.nome)}">`)}
-    ${field('p-dep', 'Departamento', seg('p-dep', Object.entries(DEP).map(([k, d]) => [k, d.nome]), p.dep))}
-    ${field('p-tur', 'Turno', seg('p-tur', TURNOS, p.turno))}
-    <button class="btn" id="p-ok" style="width:100%">${ME ? 'Salvar' : 'Começar'}</button></div>
-    ${ME ? `<div class="card pad mt2"><h3 style="margin-top:0">Admin</h3>${isAdmin()
-      ? '<p class="hint" style="font-size:15px;margin-top:0">Você está como admin neste aparelho: vê as telas de todos os departamentos e a área de cadastro.</p><button class="btn ghost" id="p-sair" style="width:100%">Sair do admin</button>'
-      : `<p class="hint" style="font-size:15px;margin-top:0">Só para quem cuida dos cadastros.</p>${field('p-adm', 'Senha de admin', '<input id="p-adm" type="password" autocomplete="current-password">', 0)}<div class="err" id="p-adm-msg" style="color:var(--red);font-weight:600;min-height:20px"></div><button class="btn ghost" id="p-entrar" style="width:100%">Entrar como admin</button>`}</div>` : ''}`;
-  live([['p-nome', R.req('O nome')], ['p-dep', R.req('O departamento')], ['p-tur', R.req('O turno')]], 'p-ok');
-  $('p-ok').onclick = () => { ME = { nome: val('p-nome').trim(), dep: val('p-dep'), turno: val('p-tur') }; store.set('cd-perfil', ME); home(); };
-  if ($('p-sair')) $('p-sair').onclick = () => { store.set('cd-admin', null); toast('Você saiu do admin'); vPerfil(); };
-  if ($('p-entrar')) {
-    const ir = () => entrarAdmin('p-entrar', 'p-adm', 'p-adm-msg', () => { toast('Entrou como admin'); home(); });
-    $('p-entrar').onclick = ir; $('p-adm').onkeydown = (e) => e.key === 'Enter' && ir();
-  }
-}
-function entrarAdmin(btn, campo, msg, depois) {
-  return ocupado(btn, 'Entrando…', async () => {
-    store.set('cd-admin', val(campo));
-    try { await api('/api/admin/entrar', { method: 'POST' }); } catch (e) { store.set('cd-admin', null); $(msg).textContent = e.message; throw e; }
-    depois();
+// ---------- login e conta ----------
+function vLogin(msg) {
+  titulo('Qualidade do óleo', 'Entrar');
+  back.hidden = true; meBtn.hidden = true; layer.innerHTML = '';
+  app.innerHTML = `<div class="login card pad"><div class="marca">${gota('cf')}<div><b>Qualidade do óleo</b><span>Usinagem de Eixos e Fundidos</span></div></div>
+    ${field('l-user', 'Usuário', '<input id="l-user" autocomplete="username" autocapitalize="none" spellcheck="false">', 0)}
+    ${field('l-pass', 'Senha', '<input id="l-pass" type="password" autocomplete="current-password">', 0)}
+    <div class="msg" id="l-msg">${esc(msg && !/Entre com seu/.test(msg) ? msg : '')}</div>
+    <button class="btn" id="l-ok" style="width:100%">Entrar</button>
+    <p class="tag" style="text-align:center">Esqueceu a senha? Fale com o admin.</p></div>`;
+  const ir = () => ocupado('l-ok', 'Entrando…', async () => {
+    $('l-msg').textContent = '';
+    try {
+      const r = await api('/api/login', { method: 'POST', body: { login: val('l-user'), senha: val('l-pass') } });
+      store.set('cd-token', r.token); ME = deUsuario(r.usuario); limpaCache(); pilha = []; view = { v: 'menu' }; render();
+    } catch (e) { $('l-msg').textContent = e.message; $('l-ok').disabled = false; $('l-ok').textContent = 'Entrar'; }
   });
+  $('l-ok').onclick = ir;
+  $('l-user').onkeydown = (e) => e.key === 'Enter' && $('l-pass').focus();
+  $('l-pass').onkeydown = (e) => e.key === 'Enter' && ir();
+  $('l-user').focus();
+}
+async function sair() {
+  try { await api('/api/logout', { method: 'POST' }); } catch {}
+  store.set('cd-token', null); ME = null; cfD = null; limpaCache(); pilha = []; view = { v: 'menu' };
+  vLogin();
+}
+function vConta() {
+  const novo = ME.trocar;
+  titulo(novo ? 'Crie sua senha' : 'Minha conta', ME.nome);
+  app.innerHTML = `${novo ? '' : `<div class="card pad"><div class="conta"><span class="av">${esc(ME.nome.trim()[0] || '?').toUpperCase()}</span><div><b>${esc(ME.nome)}</b><span>Usuário: ${esc(ME.login)}${ME.admin ? ' · admin' : ''}</span></div></div>
+      <dl class="dados"><div><dt>Departamento</dt><dd>${esc(DEP[ME.dep]?.nome || ME.dep)}</dd></div><div><dt>Turno</dt><dd>${esc(ME.turno)}</dd></div></dl>
+      <p class="hint" style="margin:0">Departamento e turno são definidos pelo admin.</p></div>`}
+    <div class="card pad${novo ? '' : ' mt2'}"><h3 style="margin-top:0">${novo ? 'Antes de começar, troque a senha provisória' : 'Trocar senha'}</h3>
+      ${novo ? '' : field('s-atual', 'Senha atual', '<input id="s-atual" type="password" autocomplete="current-password">')}
+      ${field('s-nova', 'Nova senha', '<input id="s-nova" type="password" autocomplete="new-password">', 1, 'mínimo 4 caracteres')}
+      ${field('s-conf', 'Repita a nova senha', '<input id="s-conf" type="password" autocomplete="new-password">')}
+      <button class="btn" id="s-ok" style="width:100%">Salvar senha</button></div>
+    <button class="btn ghost sair" id="s-sair">Sair / trocar de usuário</button>`;
+  live([...(novo ? [] : [['s-atual', R.req('A senha atual')]]), ['s-nova', (v) => (v.length < 4 ? 'A senha precisa ter pelo menos 4 caracteres.' : '')], ['s-conf', (v) => (v !== val('s-nova') ? 'As senhas não são iguais.' : '')]], 's-ok');
+  $('s-ok').onclick = () => ocupado('s-ok', 'Salvando…', async () => {
+    await api('/api/me/senha', { method: 'PUT', body: { atual: val('s-atual'), nova: val('s-nova') } });
+    toast('Senha alterada');
+    if (novo) { ME.trocar = false; home(); } else vConta();
+  });
+  $('s-sair').onclick = sair;
 }
 
 // ---------- início ----------
-function linhaTela(k, dep, nome, sub, alvo) {
-  return `<div class="lin"><button class="abre" data-go='${esc(JSON.stringify(alvo))}'>${gota(k)}<span class="tx"><b>${esc(nome)}</b><small>${sub}</small></span></button>
-    <button class="hist" data-go='${esc(JSON.stringify({ v: 'hist', id: k, dep }))}' aria-label="Histórico de ${esc(nome)}">Histórico</button></div>`;
-}
-function telasDe(dep, r) {
+function botoesDe(dep, r) {
   const c = r.cf;
-  const subCF = c ? `Último ${quando(c.data)} · pH ${fmt(c.ph, 1)} · ${fmt(c.concentracao, 1)}% · ${esc(c.descricao)}` : 'Nenhum registro ainda';
-  return `<div class="card lista">${linhaTela('cf', dep, 'Central de Fluidos', subCF, { v: 'cf', dep })}${OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
+  const b = (k, nome, sub, alvo, cls = '') => `<button class="tile${cls}" style="--c:${COR[k]}" data-go='${esc(JSON.stringify(alvo))}'><b>${esc(nome)}</b><span>${sub}</span></button>`;
+  return `<div class="tiles">${b('cf', 'Central de Fluidos', c ? `Último ${quando(c.data)}` : 'Sem registros', { v: 'cf', dep }, ' wide')}${OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
     const l = r.mi[o.id];
-    return linhaTela(o.id, dep, o.nome, l ? `Último ${quando(l.data)} · CT ${esc(l.ct)}${l.concentracao != null ? ` · ${fmt(l.concentracao, 1)}%` : ''}` : 'Nenhum registro ainda', { v: 'oil', id: o.id, dep });
+    return b(o.id, o.nome, l ? `Último ${quando(l.data)}` : 'Sem registros', { v: 'oil', id: o.id, dep });
   }).join('')}</div>`;
 }
 async function vMenu() {
-  if (!ME) return go({ v: 'perfil' }, false);
   const adm = isAdmin();
-  titulo('Qualidade do óleo', adm ? 'Todos os departamentos' : DEP[ME.dep].nome);
+  titulo('Menu', adm ? 'Todos os departamentos' : DEP[ME.dep].nome);
   const deps = adm ? [ME.dep, ...Object.keys(DEP).filter((d) => d !== ME.dep)] : [ME.dep];
   const res = await Promise.all(deps.map((d) => api('/api/resumo?dep=' + d)));
-  const avisos = [];
-  if (adm) deps.forEach((d, i) => {
-    const r = res[i], a = [];
-    if (!r.cts) a.push('nenhum CT cadastrado');
-    else if (r.ctsSemPreco) a.push(`${r.ctsSemPreco} CT(s) sem preço`);
-    if (r.semPrecoCF.length) a.push(`sem preço na Central: ${r.semPrecoCF.map(esc).join(', ')}`);
-    if (a.length) avisos.push(`<b>${esc(DEP[d].nome)}:</b> ${a.join('; ')}.`);
-  });
-  app.innerHTML = `<div class="ola"><div><h2>Olá, ${esc(ME.nome.split(' ')[0])}</h2><p>${esc(DEP[ME.dep].nome)} · ${esc(ME.turno)}</p></div><button class="btn ghost sm" id="trocar">Trocar</button></div>
-    ${avisos.length ? `<div class="warn">${avisos.join('<br>')} <a href="#" id="toAdm" style="color:inherit;font-weight:700">Ajustar no Admin</a></div>` : ''}
-    ${deps.map((d, i) => `<h3 class="sec">${adm ? esc(DEP[d].nome) : 'Registrar'}</h3>${telasDe(d, res[i])}`).join('')}
-    <h3 class="sec">Consultar</h3>
-    <div class="card lista">
-      <div class="lin"><button class="abre" data-go='{"v":"info"}'><span class="ico">i</span><span class="tx"><b>Informações das máquinas</b><small>Faixas de concentração e pH, fator de refração e volumes</small></span></button></div>
-      ${adm ? `<div class="lin"><button class="abre" data-go='{"v":"admin"}'><span class="ico">⚙</span><span class="tx"><b>Admin</b><small>CTs, preços, máquinas e importação</small></span></button></div>` : ''}
-    </div>
-    ${adm ? '' : '<p class="tag" style="text-align:center"><button class="link" id="souAdm">Entrar como admin</button></p>'}`;
+  app.innerHTML = deps.map((d, i) => `${adm ? `<h3 class="sec">${esc(DEP[d].nome)}</h3>` : ''}${botoesDe(d, res[i])}`).join('') +
+    `<div class="menu2"><button class="btn ghost" data-go='{"v":"info"}'>Informações</button>${adm ? `<button class="btn ghost" data-go='{"v":"admin"}'>Admin</button>` : ''}</div>
+    <button class="btn ghost sair" id="m-sair">Sair / trocar de usuário</button>`;
   app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { const v = JSON.parse(b.dataset.go); if (v.v === 'cf') cfD = null; go(v); }));
-  $('trocar').onclick = () => go({ v: 'perfil' });
-  if ($('souAdm')) $('souAdm').onclick = () => go({ v: 'perfil' });
-  if ($('toAdm')) $('toAdm').onclick = (e) => { e.preventDefault(); go({ v: 'admin' }); };
+  $('m-sair').onclick = sair;
 }
 const foraDoDep = (nome) => {
   app.innerHTML = `<div class="empty">${esc(nome)} não é usado em ${esc(DEP[ME.dep].nome)}.</div><div class="row mt"><button class="btn ghost" id="mn">Voltar ao início</button></div>`;
   $('mn').onclick = home;
 };
-const aviso = (D) => (D !== ME.dep ? `<div class="warn">Lançando para <b>${esc(DEP[D].nome)}</b>, que não é o departamento do seu perfil.</div>` : '');
+const aviso = (D) => (D !== ME.dep ? `<div class="warn">Lançando para <b>${esc(DEP[D].nome)}</b>, que não é o seu departamento.</div>` : '');
 
 // ---------- Central de Fluidos (3 etapas) ----------
 async function vCF() {
@@ -428,25 +419,61 @@ function editaCF(r, recarrega) {
 
 // ---------- admin ----------
 async function vAdmin() {
-  titulo('Admin', DEP[view.dep || ME.dep].nome);
-  if (!isAdmin()) {
-    app.innerHTML = `<div class="card pad"><h2>Entrar como admin</h2>${field('ap', 'Senha de admin', '<input id="ap" type="password" autocomplete="current-password">')}<div class="err" id="ap-msg" style="color:var(--red);font-weight:600;min-height:20px"></div><button class="btn" id="ab" style="width:100%">Entrar</button></div>`;
-    const ir = () => entrarAdmin('ab', 'ap', 'ap-msg', () => { render(); });
-    $('ab').onclick = ir; $('ap').onkeydown = (e) => e.key === 'Enter' && ir(); $('ap').focus();
-    return;
-  }
-  const dep = view.dep || ME.dep, tab = view.tab || 'ct';
-  app.innerHTML = `<div class="tabs">${[['ct', 'Centros de trabalho'], ['pr', 'Preços da Central'], ['mq', 'Máquinas'], ['hi', 'Importar histórico']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-    ${field('a-dep', 'Departamento', sel('a-dep', Object.entries(DEP).map(([k, d]) => [k, d.nome]), dep, 'Departamento'), 0)}<div id="adm"><div class="load">Carregando…</div></div>
-    <div class="row" style="margin-top:22px"><button class="btn ghost" id="sair">Sair do admin</button></div>`;
+  if (!isAdmin()) { titulo('Admin'); app.innerHTML = '<div class="empty">Só o admin tem acesso a esta área.</div>'; return; }
+  const tab = view.tab || 'us', dep = view.dep || ME.dep;
+  titulo('Admin', tab === 'us' || tab === 'hi' ? 'Cadastros' : DEP[dep].nome);
+  app.innerHTML = `<div class="tabs">${[['us', 'Usuários'], ['ct', 'Centros de trabalho'], ['pr', 'Preços da Central'], ['mq', 'Máquinas'], ['hi', 'Importar histórico']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+    ${tab === 'us' || tab === 'hi' ? '' : field('a-dep', 'Departamento', seg('a-dep', Object.entries(DEP).map(([k, d]) => [k, d.nome]), dep), 0)}<div id="adm"><div class="load">Carregando…</div></div>`;
   app.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { view.tab = b.dataset.t; vAdmin(); }));
-  $('a-dep').onchange = () => { view.dep = val('a-dep') || ME.dep; vAdmin(); };
-  $('sair').onclick = () => { store.set('cd-admin', null); home(); };
+  if ($('a-dep')) $('a-dep').onchange = () => { view.dep = val('a-dep') || ME.dep; vAdmin(); };
   const box = $('adm');
+  if (tab === 'us') return admUsuarios(box);
   if (tab === 'ct') return admCTs(box, dep);
   if (tab === 'pr') return admPrecos(box, dep);
-  if (tab === 'hi') { $('w-a-dep').hidden = true; return admHistorico(box); }
+  if (tab === 'hi') return admHistorico(box);
   return admMaquinas(box, dep);
+}
+async function admUsuarios(box) {
+  const lista = await api('/api/admin/usuarios');
+  const ativos = lista.filter((u) => u.ativo), inativos = lista.filter((u) => !u.ativo);
+  const item = (u) => `<button class="item" data-id="${u.id}"><div class="h"><span>${esc(u.nome)}${u.admin ? ' <span class="badge">admin</span>' : ''}</span><span class="hint">${esc(u.login)}</span></div><div class="v"><span>${esc(DEP[u.departamento]?.nome || u.departamento)}</span><span>${esc(u.turno)}</span>${u.trocar_senha ? '<span>senha provisória</span>' : ''}</div></button>`;
+  box.innerHTML = `<button class="btn" id="u-novo" style="width:100%;margin-top:14px">Novo usuário</button>
+    <h3>Usuários (${ativos.length})</h3><div class="regs-lista">${ativos.map(item).join('') || '<div class="empty">Nenhum usuário.</div>'}</div>
+    ${inativos.length ? `<h3>Desativados (${inativos.length})</h3><div class="regs-lista">${inativos.map(item).join('')}</div>` : ''}`;
+  const recarrega = () => admUsuarios(box);
+  const abre = (u) => folha(u ? 'Editar usuário' : 'Novo usuário', `
+    ${field('u-nome', 'Nome', `<input id="u-nome" maxlength="80" value="${esc(u?.nome)}">`)}
+    ${u ? `<p class="hint" style="margin:-6px 0 14px">Usuário para entrar: <b>${esc(u.login)}</b></p>` : field('u-login', 'Usuário para entrar', '<input id="u-login" maxlength="60" autocapitalize="none" spellcheck="false" placeholder="ex.: joao.silva">', 1, 'sem espaços')}
+    ${field('u-dep', 'Departamento', seg('u-dep', Object.entries(DEP).map(([k, d]) => [k, d.nome]), u?.departamento))}
+    ${field('u-tur', 'Turno', seg('u-tur', TURNOS, u?.turno))}
+    ${field('u-adm', 'Acesso', seg('u-adm', [['0', 'Operador'], ['1', 'Admin']], u?.admin ? '1' : '0'))}
+    ${u ? '' : field('u-senha', 'Senha provisória', '<input id="u-senha" autocomplete="off">', 1, 'a pessoa troca no primeiro acesso')}
+    <div class="msg" id="sh-msg"></div><div class="row"><button class="btn" id="sv">Salvar</button></div>
+    ${u ? `<div class="card pad mt2"><h3 style="margin-top:0">Redefinir senha</h3><p class="hint" style="margin-top:-6px">Para quando a pessoa esquecer. Ela troca no próximo acesso.</p>${field('u-reset', 'Nova senha provisória', '<input id="u-reset" autocomplete="off">', 0)}<button class="btn ghost" id="u-rs" style="width:100%">Redefinir senha</button></div>
+      <div class="row mt2"><button class="btn ghost" id="u-at" style="color:${u.ativo ? 'var(--red)' : 'var(--blueD)'}">${u.ativo ? 'Desativar acesso' : 'Reativar acesso'}</button></div>` : ''}`, () => {
+    const regras = [['u-nome', R.req('O nome')], ['u-dep', R.req('O departamento')], ['u-tur', R.req('O turno')], ...(u ? [] : [['u-login', (v) => (!/^[a-zA-Z0-9._-]{2,60}$/.test(v.trim()) ? 'Use de 2 a 60 letras, números, ponto, hífen ou sublinhado, sem espaços.' : lista.some((x) => x.login.toLowerCase() === v.trim().toLowerCase()) ? 'Já existe um usuário com esse login.' : '')], ['u-senha', (v) => (v.length < 4 ? 'A senha precisa ter pelo menos 4 caracteres.' : '')]])];
+    live(regras, 'sv');
+    const corpoU = (extra = {}) => ({ nome: val('u-nome'), departamento: val('u-dep'), turno: val('u-tur'), admin: val('u-adm') === '1', ...extra });
+    $('sv').onclick = () => salvaFolha(async () => {
+      if (u) await api('/api/admin/usuarios/' + u.id, { method: 'PUT', body: corpoU({ ativo: u.ativo }) });
+      else await api('/api/admin/usuarios', { method: 'POST', body: corpoU({ login: val('u-login').trim(), senha: val('u-senha') }) });
+      if (u && u.id === ME.id) { Object.assign(ME, { nome: val('u-nome'), dep: val('u-dep'), turno: val('u-tur') }); limpaCache(); }
+      layer.innerHTML = ''; recarrega(); toast(u ? 'Usuário atualizado' : 'Usuário criado');
+    });
+    if (u) {
+      $('u-rs').onclick = () => ocupado('u-rs', 'Redefinindo…', async () => {
+        if (val('u-reset').length < 4) throw new Error('A senha precisa ter pelo menos 4 caracteres.');
+        await api(`/api/admin/usuarios/${u.id}/senha`, { method: 'POST', body: { senha: val('u-reset') } });
+        layer.innerHTML = ''; recarrega(); toast(`Senha de ${u.nome} redefinida`);
+      });
+      $('u-at').onclick = () => ocupado('u-at', 'Salvando…', async () => {
+        await api('/api/admin/usuarios/' + u.id, { method: 'PUT', body: { nome: u.nome, departamento: u.departamento, turno: u.turno, admin: u.admin, ativo: !u.ativo } });
+        layer.innerHTML = ''; recarrega(); toast(u.ativo ? 'Acesso desativado' : 'Acesso reativado');
+      });
+    }
+  });
+  $('u-novo').onclick = () => abre(null);
+  box.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => abre(lista.find((x) => x.id === +b.dataset.id))));
 }
 async function admCTs(box, dep) {
   const lista = await cts(dep, true);
@@ -646,9 +673,11 @@ function toast(msg, desfazer, ruim) {
 }
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') layer.innerHTML = ''; });
 
-// ---------- início ----------
+// ---------- partida ----------
 (async () => {
   try { CFG = await (await fetch('/api/config')).json(); } catch {}
-  if (CFG.precisaChave && !store.get('cd-chave')) return telaChave();
+  if (!store.get('cd-token')) return vLogin();
+  try { ME = deUsuario(await api('/api/me')); }
+  catch (e) { if (store.get('cd-token')) { app.innerHTML = `<div class="empty">${esc(e.message)}</div><div class="row mt"><button class="btn ghost" onclick="location.reload()">Tentar de novo</button></div>`; } return; }
   render();
 })();

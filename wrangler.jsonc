@@ -17,6 +17,5 @@
   ],
   "observability": { "enabled": true }
   // Secrets (configure no painel da Cloudflare, não aqui):
-  //   ADMIN_PASSWORD  senha da área de admin
-  //   APP_PASSWORD    opcional: senha de acesso para todos
+  //   ADMIN_PASSWORD  senha do usuário "admin" (primeiro acesso e recuperação)
 }
