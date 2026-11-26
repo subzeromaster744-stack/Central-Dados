@@ -21,11 +21,11 @@ export const OLEOS = [
 
 // Produtos da Central de Fluidos e as descrições de cada departamento.
 export const PRODUTOS_CF = {
-  'Filtro (m)': { un: 'm', Eixos: ['Tecfibra', 'Fibertex', 'Argetex'], Fundidos: ['Argetex', 'TechWoven', 'Tecfibra'] },
+  'Filtro (m)': { un: 'm', Eixos: ['Interfiltros', 'Argetex', 'Tecfibra', 'Fibertex'], Fundidos: ['Tech-Woven', 'Argetex', 'Tecfibra'] },
   'Água (m³)': { un: 'm³', Eixos: ['Água'], Fundidos: ['Água'] },
   'Anticorrosivo (L)': { un: 'L', Eixos: ['Aktiv 28'], Fundidos: ['Additive M'] },
   'Anti-séptico (L)': { un: 'L', Eixos: ['A18'], Fundidos: ['A18'] },
-  'Óleo de corte (L)': { un: 'L', Eixos: ['Ecocool SYN 6002'], Fundidos: ['Microcut 510 FW'] },
+  'Óleo de corte (L)': { un: 'L', Eixos: ['Ecocool SYN 6002'], Fundidos: ['Microcut 510 FW', 'Ecocool SYN 6002'] },
 };
 
 // Limites da Central de Fluidos

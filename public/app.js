@@ -274,8 +274,8 @@ async function vHist() {
     const sum = isCF ? `<span><b>${t.n}</b> registros</span><span>Custo total <b>${brl(t.custo)}</b></span>`
       : `<span><b>${t.n}</b> registros</span><span>Reposição <b>${fmt(t.litros, 0)} L</b></span><span>Custo <b>${brl(t.custo)}</b></span>`;
     const itens = d.registros.map((r) => isCF
-      ? `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · ${esc(r.turno)}</span><span>${esc(r.descricao)}</span></div><div class="v"><span>pH <b>${fmt(r.ph, 1)}</b></span><span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span><span>${esc(r.produto)} <b>${fmt(r.consumo, 0)}</b></span><span>${esc(r.responsavel)}</span>${r.preco > 0 ? `<span>${brl(r.consumo * r.preco)}</span>` : '<span>sem preço</span>'}${r.observacoes ? `<span>“${esc(r.observacoes)}”</span>` : ''}</div></button>`
-      : `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · CT ${esc(r.ct)}</span><span>${fmt(r.reposicao, 0)} L</span></div><div class="v">${r.concentracao != null ? `<span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span>` : ''}${r.ph != null ? `<span>pH <b>${fmt(r.ph, 1)}</b></span>` : ''}<span>${esc(r.turno)}</span><span>${esc(r.responsavel)}</span><span>${r.preco > 0 ? brl(r.reposicao * r.preco) : 'sem preço'}</span></div></button>`).join('');
+      ? `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)}${r.turno ? ' · ' + esc(r.turno) : ''}</span><span>${esc(r.descricao)}</span></div><div class="v"><span>pH <b>${fmt(r.ph, 1)}</b></span><span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span><span>${esc(r.produto)} <b>${fmt(r.consumo, 0)}</b></span><span>${esc(r.responsavel)}</span>${r.preco > 0 ? `<span>${brl(r.consumo * r.preco)}</span>` : '<span>sem preço</span>'}${r.observacoes ? `<span>“${esc(r.observacoes)}”</span>` : ''}</div></button>`
+      : `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · CT ${esc(r.ct)}</span><span>${fmt(r.reposicao, 0)} L</span></div><div class="v">${r.concentracao != null ? `<span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span>` : ''}${r.ph != null ? `<span>pH <b>${fmt(r.ph, 1)}</b></span>` : ''}<span>${esc(r.turno || 'sem turno')}</span><span>${esc(r.responsavel)}</span><span>${r.preco > 0 ? brl(r.reposicao * r.preco) : 'sem preço'}</span></div></button>`).join('');
     box.innerHTML = `<div class="sum">${sum}</div><div class="list">${itens || '<div class="empty">Nenhum registro neste período.</div>'}</div>`;
     box.querySelectorAll('.item').forEach((b) => (b.onclick = () => { const r = d.registros.find((x) => x.id === +b.dataset.id); isCF ? editaCF(r, lista) : editaOleo(o, r, lista); }));
   }
@@ -338,7 +338,7 @@ async function vAdmin() {
     return;
   }
   const dep = view.dep || ME.dep, tab = view.tab || 'ct';
-  app.innerHTML = `<div class="tabs">${[['ct', 'Centros de trabalho'], ['pr', 'Preços da Central'], ['mq', 'Máquinas']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+  app.innerHTML = `<div class="tabs">${[['ct', 'Centros de trabalho'], ['pr', 'Preços da Central'], ['mq', 'Máquinas'], ['hi', 'Importar histórico']].map(([k, l]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     ${field('a-dep', 'Departamento', sel('a-dep', Object.entries(DEP).map(([k, d]) => [k, d.nome]), dep, 'Departamento'), 0)}<div id="adm"><div class="load">Carregando…</div></div>
     <div class="row" style="margin-top:22px"><button class="btn ghost" id="sair">Sair do admin</button></div>`;
   app.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { view.tab = b.dataset.t; vAdmin(); }));
@@ -347,6 +347,7 @@ async function vAdmin() {
   const box = $('adm');
   if (tab === 'ct') return admCTs(box, dep);
   if (tab === 'pr') return admPrecos(box, dep);
+  if (tab === 'hi') { $('w-a-dep').hidden = true; return admHistorico(box); }
   return admMaquinas(box, dep);
 }
 async function admCTs(box, dep) {
@@ -421,6 +422,95 @@ async function admMaquinas(box, dep) {
   });
   $('mq-n').onclick = () => abre(null);
   box.querySelectorAll('.item').forEach((b) => (b.onclick = () => abre(lista.find((x) => x.id === +b.dataset.id))));
+}
+
+// ---------- importar histórico (CSV das listas do SharePoint) ----------
+function lerCSV(txt) {
+  txt = txt.replace(/^﻿/, '');
+  const prim = txt.slice(0, txt.indexOf('\n') + 1 || undefined);
+  const sep = [';', ',', '\t'].reduce((a, b) => (prim.split(b).length > prim.split(a).length ? b : a));
+  const linhas = []; let lin = [], cel = '', q = false;
+  for (let i = 0; i < txt.length; i++) {
+    const c = txt[i];
+    if (q) { if (c === '"' && txt[i + 1] === '"') { cel += '"'; i++; } else if (c === '"') q = false; else cel += c; }
+    else if (c === '"') q = true;
+    else if (c === sep) { lin.push(cel); cel = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && txt[i + 1] === '\n') i++; lin.push(cel); linhas.push(lin); lin = []; cel = ''; }
+    else cel += c;
+  }
+  if (cel || lin.length) { lin.push(cel); linhas.push(lin); }
+  return linhas.filter((l) => l.some((c) => c.trim()));
+}
+const chave = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const dataISO = (s) => { s = String(s).trim(); let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`; m = s.match(/^\d{4}-\d{2}-\d{2}/); return m ? m[0] : ''; };
+const horaISO = (s) => { const d = dataISO(s), m = String(s).match(/(\d{1,2}):(\d{2})/); if (!d || !m) return ''; const t = new Date(`${d}T${m[1].padStart(2, '0')}:${m[2]}:00-03:00`); return isNaN(t) ? '' : t.toISOString(); };
+const turnoDe = (s) => { const k = chave(s), d = k.match(/^(\d)/); return d ? `${d[1]}° Turno` : k.includes('normal') ? 'Turno Normal' : ''; };
+const depDe = (s) => (/fundid/i.test(s) ? 'Fundidos' : /eixo/i.test(s) ? 'Eixos' : '');
+const oleoDe = (s) => OLEOS.find((o) => [o.id, o.tipo, o.nome].some((x) => chave(x) === chave(s)))?.id;
+const nOuVazio = (s) => (String(s ?? '').trim() === '' ? null : num(s));
+function mapearHistorico(linhas) {
+  const cab = linhas[0].map(chave), col = (...n) => cab.findIndex((c) => n.includes(c));
+  const g = (l, i) => (i >= 0 ? (l[i] ?? '').trim() : '');
+  const C = { id: col('id'), data: col('data'), turno: col('periodo', 'turno'), ph: col('ph'), dep: col('departamento'), resp: col('responsavel'), hora: col('hora') };
+  const avisos = { semDep: 0, ignoradas: [] };
+  if (cab.includes('descproduto')) {
+    Object.assign(C, { conc: col('concentracao'), obs: col('observacoes'), prod: col('produto'), desc: col('descproduto'), cons: col('consumo'), custo: col('custo') });
+    const regs = linhas.slice(1).map((l, i) => {
+      let dep = depDe(g(l, C.dep)); if (!dep) { dep = 'Eixos'; avisos.semDep++; }
+      return { origem: 'sp-cf:' + (g(l, C.id) || i + 2), departamento: dep, data: dataISO(g(l, C.data)), turno: turnoDe(g(l, C.turno)), ph: nOuVazio(g(l, C.ph)), concentracao: nOuVazio(g(l, C.conc)),
+        produto: g(l, C.prod), descricao: g(l, C.desc).replace(/^TechWoven$/i, 'Tech-Woven'), consumo: nOuVazio(g(l, C.cons)), preco: nOuVazio(g(l, C.custo)),
+        observacoes: g(l, C.obs), responsavel: g(l, C.resp), criado_em: horaISO(g(l, C.hora)) };
+    });
+    return { tipo: 'cf', nome: 'Central de Fluidos', regs, avisos };
+  }
+  if (cab.includes('ct') && cab.includes('tipo')) {
+    Object.assign(C, { ct: col('ct'), conc: col('concentracao'), rep: col('reposicaooleo', 'reposicao'), custo: col('custoproduto', 'custo'), tipo: col('tipo') });
+    const regs = [];
+    linhas.slice(1).forEach((l, i) => {
+      const tipo = oleoDe(g(l, C.tipo));
+      if (!tipo) return avisos.ignoradas.push(`linha ${i + 2}: óleo "${g(l, C.tipo)}" desconhecido`);
+      let dep = depDe(g(l, C.dep)); if (!dep) { dep = 'Eixos'; avisos.semDep++; }
+      regs.push({ origem: 'sp-mi:' + (g(l, C.id) || i + 2), tipo, departamento: dep, data: dataISO(g(l, C.data)), ct: g(l, C.ct), concentracao: nOuVazio(g(l, C.conc)), ph: nOuVazio(g(l, C.ph)),
+        reposicao: nOuVazio(g(l, C.rep)), preco: nOuVazio(g(l, C.custo)), turno: turnoDe(g(l, C.turno)), responsavel: g(l, C.resp), criado_em: horaISO(g(l, C.hora)) });
+    });
+    return { tipo: 'mi', nome: 'Máquinas individuais', regs, avisos };
+  }
+  return null;
+}
+function admHistorico(box) {
+  box.innerHTML = `<h3>Importar histórico do SharePoint</h3>
+    <p class="hint" style="font-size:14px;margin-top:-4px">Escolha os CSV exportados das listas <b>Relatório óleo Central de Fluidos</b> e <b>Relatório óleo Máquinas Individuais</b> (um ou os dois). O tipo de cada arquivo é reconhecido pelas colunas. Pode importar de novo um arquivo mais recente: o que já foi importado é ignorado.</p>
+    ${field('h-f', 'Arquivos CSV', '<input id="h-f" type="file" accept=".csv,text/csv" multiple>', 0)}
+    <div id="h-prev"></div><button class="btn" id="h-go" style="width:100%" disabled>Importar</button><div id="h-res"></div>`;
+  let lotes = [];
+  $('h-f').onchange = async () => {
+    lotes = []; $('h-res').innerHTML = '';
+    const out = [];
+    for (const f of $('h-f').files) {
+      const m = mapearHistorico(lerCSV(await f.text()));
+      if (!m) { out.push(`<li><b>${esc(f.name)}</b>: colunas não reconhecidas.</li>`); continue; }
+      lotes.push(m);
+      const datas = m.regs.map((r) => r.data).filter(Boolean).sort();
+      out.push(`<li><b>${esc(m.nome)}</b> (${esc(f.name)}): ${m.regs.length.toLocaleString('pt-BR')} registros${datas.length ? `, de ${br(datas[0])} a ${br(datas.at(-1))}` : ''}${m.avisos.semDep ? `; ${m.avisos.semDep} sem departamento (vão como Eixos)` : ''}${m.avisos.ignoradas.length ? `; ${m.avisos.ignoradas.length} ignorados` : ''}.</li>`);
+    }
+    $('h-prev').innerHTML = out.length ? `<ul style="padding-left:20px">${out.join('')}</ul>` : '';
+    $('h-go').disabled = !lotes.length;
+  };
+  $('h-go').onclick = () => ocupado('h-go', 'Importando…', async () => {
+    const res = [];
+    for (const m of lotes) {
+      let novos = 0, existentes = 0; const erros = [];
+      for (let i = 0; i < m.regs.length; i += 200) {
+        $('h-go').textContent = `${m.nome}: ${Math.min(i + 200, m.regs.length).toLocaleString('pt-BR')} de ${m.regs.length.toLocaleString('pt-BR')}…`;
+        const r = await api('/api/admin/importar/' + m.tipo, { method: 'POST', body: { registros: m.regs.slice(i, i + 200) } });
+        novos += r.novos; existentes += r.existentes; erros.push(...r.erros);
+      }
+      res.push(`${m.nome}: ${novos.toLocaleString('pt-BR')} novos, ${existentes.toLocaleString('pt-BR')} já existiam${erros.length ? `, ${erros.length} com erro:\n` + erros.slice(0, 30).map((e) => `  ${e.origem}: ${e.msg}`).join('\n') : ''}${m.avisos.ignoradas.length ? '\n  ' + m.avisos.ignoradas.slice(0, 20).join('\n  ') : ''}`);
+    }
+    $('h-res').innerHTML = `<pre class="res">${esc(res.join('\n\n'))}</pre>`;
+    $('h-go').textContent = 'Importar'; $('h-go').disabled = false;
+    toast('Importação concluída');
+  });
 }
 
 // ---------- informações ----------

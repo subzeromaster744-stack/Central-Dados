@@ -50,6 +50,7 @@ Entre em **Admin**:
 1. Cadastre os CTs: um a um, escolhendo o CSV exportado da lista "CTs e Preços II" do SharePoint, ou colando do Excel (`CT;óleo;seção;preço`). Um mesmo CT pode ter mais de um óleo (ex.: emulsão e MQL).
 2. Preencha os preços da Central de Fluidos.
 3. Cadastre as máquinas da tela Informações.
+4. Em **Importar histórico**, escolha os CSV exportados das listas "Relatório óleo Central de Fluidos" e "Relatório óleo Máquinas Individuais". Importar de novo não duplica: cada registro guarda o ID de origem.
 
 O menu avisa o que ainda está sem preço.
 

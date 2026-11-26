@@ -386,6 +386,41 @@ async function admin(req, env, seg, m) {
     }
   }
 
+  // Importação do histórico (ex.: listas do SharePoint). A tela lê o CSV e envia em lotes.
+  // Registros com a mesma "origem" já importada são ignorados.
+  if (seg[0] === 'importar' && (seg[1] === 'mi' || seg[1] === 'cf') && m === 'POST') {
+    const { registros } = await corpo(req);
+    if (!Array.isArray(registros) || !registros.length || registros.length > 200) falha(400, 'Envie de 1 a 200 registros por vez.');
+    const nulo = (v) => (v == null || v === '' ? null : num(v));
+    const erros = [], stmts = [];
+    registros.forEach((r, i) => {
+      try {
+        const origem = texto(r.origem, 60); if (!origem) throw 'sem ID de origem';
+        const dep = r.departamento; if (!DEPARTAMENTOS[dep]) throw 'departamento inválido';
+        const dt = texto(r.data, 10); if (!dataValida(dt)) throw 'data inválida';
+        const criado = dataValida(String(r.criado_em || '').slice(0, 10)) ? String(r.criado_em).slice(0, 30) : dt + 'T15:00:00.000Z';
+        const nums = (o) => { for (const [k, v] of Object.entries(o)) if (v !== null && !Number.isFinite(v)) throw `${k} inválido`; };
+        if (seg[1] === 'mi') {
+          if (!oleoPorId(r.tipo)) throw 'óleo inválido';
+          const ct = texto(r.ct, 30); if (!ct) throw 'CT vazio';
+          const v = { concentracao: nulo(r.concentracao), ph: nulo(r.ph), reposicao: nulo(r.reposicao) ?? 0, preco: nulo(r.preco) ?? 0 }; nums(v);
+          stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO registros_mi (origem, tipo, departamento, data, ct, concentracao, ph, reposicao, preco, turno, responsavel, criado_em)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(origem, r.tipo, dep, dt, ct, v.concentracao, v.ph, v.reposicao, v.preco, texto(r.turno, 20), texto(r.responsavel, 80), criado));
+        } else {
+          const v = { ph: nulo(r.ph), concentracao: nulo(r.concentracao), consumo: nulo(r.consumo) ?? 0, preco: nulo(r.preco) ?? 0 }; nums(v);
+          if (v.ph === null || v.concentracao === null) throw 'sem pH ou concentração';
+          const produto = texto(r.produto, 40), descricao = texto(r.descricao, 60);
+          if (!produto || !descricao) throw 'sem produto';
+          stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO registros_cf (origem, departamento, data, turno, ph, concentracao, produto, descricao, consumo, preco, observacoes, responsavel, criado_em)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(origem, dep, dt, texto(r.turno, 20), v.ph, v.concentracao, produto, descricao, v.consumo, v.preco, texto(r.observacoes, 1000), texto(r.responsavel, 80), criado));
+        }
+      } catch (e) { erros.push({ origem: r?.origem, msg: String(e) }); }
+    });
+    const res = stmts.length ? await env.DB.batch(stmts) : [];
+    const novos = res.reduce((t, x) => t + (x.meta?.changes || 0), 0);
+    return json({ novos, existentes: stmts.length - novos, erros });
+  }
+
   if (seg[0] === 'precos' && m === 'PUT') {
     const { departamento, precos } = await corpo(req);
     const dep = exigeDep(departamento);
