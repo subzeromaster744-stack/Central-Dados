@@ -589,12 +589,15 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
+    let r;
     try {
-      return await api(req, env, url);
+      r = await api(req, env, url);
     } catch (e) {
-      if (e instanceof Erro) return json({ erro: e.message }, e.status);
-      console.error(e);
-      return json({ erro: 'Erro interno. Tente de novo em instantes.' }, 500);
+      if (e instanceof Erro) r = json({ erro: e.message }, e.status);
+      else { console.error(e); r = json({ erro: 'Erro interno. Tente de novo em instantes.' }, 500); }
     }
+    // a tela compara com a versão que carregou e oferece atualizar quando muda
+    r.headers.set('x-versao', env.CF_VERSION?.id || 'dev');
+    return r;
   },
 };

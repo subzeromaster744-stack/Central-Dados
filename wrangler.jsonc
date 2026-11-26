@@ -15,6 +15,7 @@
       "migrations_dir": "migrations"
     }
   ],
+  "version_metadata": { "binding": "CF_VERSION" },
   "observability": { "enabled": true }
   // Secrets (configure no painel da Cloudflare, não aqui):
   //   ADMIN_PASSWORD  senha do usuário "admin" (primeiro acesso e recuperação)

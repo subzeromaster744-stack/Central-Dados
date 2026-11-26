@@ -179,3 +179,5 @@ h3.sec:first-child{margin-top:4px}
 .badge{display:inline-block;font-size:12px;font-weight:700;padding:1px 8px;border-radius:99px;background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blueD);vertical-align:middle}
 .regs-lista{border-radius:14px;box-shadow:0 0 0 1px var(--line);overflow:hidden}
 .regs-lista .item:first-child{border-top:0}
+.toast.novo{bottom:auto;top:12px;background:var(--blue);z-index:40}
+.toast.novo button{background:#fff;color:var(--blue)}

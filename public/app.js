@@ -36,10 +36,23 @@ const gota = (k) => `<span class="gota" style="--c:${COR[k] || '#2456b8'}" aria-
 
 // ---------- API ----------
 const authH = () => { const t = store.get('cd-token'); return t ? { authorization: 'Bearer ' + t } : {}; };
+let VERSAO = null, avisouVersao = false;
+function confereVersao(res) {
+  const v = res.headers.get('x-versao'); if (!v) return;
+  if (!VERSAO) { VERSAO = v; return; }
+  if (v !== VERSAO && !avisouVersao) {
+    avisouVersao = true;
+    const t = document.createElement('div'); t.className = 'toast novo'; t.setAttribute('role', 'status');
+    t.innerHTML = '<span>Saiu uma versão nova do app.</span><button>Atualizar</button>';
+    t.querySelector('button').onclick = () => location.reload();
+    document.body.appendChild(t);
+  }
+}
 async function api(path, { method = 'GET', body } = {}) {
   let res;
   try { res = await fetch(path, { method, headers: { 'content-type': 'application/json', ...authH() }, body: body ? JSON.stringify(body) : undefined }); }
   catch { throw new Error('Sem conexão. Verifique a internet e tente de novo.'); }
+  confereVersao(res);
   const d = await res.json().catch(() => ({}));
   if (res.status === 401 && path !== '/api/login') { store.set('cd-token', null); ME = null; vLogin(d.erro); throw new Error(d.erro || 'Entre de novo.'); }
   if (!res.ok) throw new Error(d.erro || 'Falha ao falar com o servidor.');
@@ -664,7 +677,7 @@ function folha(title, html, bind) {
 }
 let tt;
 function toast(msg, desfazer, ruim) {
-  document.querySelector('.toast')?.remove(); clearTimeout(tt);
+  document.querySelector('.toast:not(.novo)')?.remove(); clearTimeout(tt);
   const t = document.createElement('div'); t.className = 'toast' + (ruim ? ' bad' : ''); t.setAttribute('role', 'status');
   t.innerHTML = `<span>${esc(msg)}</span>${desfazer ? '<button>Desfazer</button>' : ''}`;
   document.body.appendChild(t);
@@ -675,7 +688,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') layer.inne
 
 // ---------- partida ----------
 (async () => {
-  try { CFG = await (await fetch('/api/config')).json(); } catch {}
+  try { const r = await fetch('/api/config'); confereVersao(r); CFG = await r.json(); } catch {}
   if (!store.get('cd-token')) return vLogin();
   try { ME = deUsuario(await api('/api/me')); }
   catch (e) { if (store.get('cd-token')) { app.innerHTML = `<div class="empty">${esc(e.message)}</div><div class="row mt"><button class="btn ghost" onclick="location.reload()">Tentar de novo</button></div>`; } return; }
