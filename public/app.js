@@ -164,8 +164,8 @@ function vLogin(msg) {
     } catch (e) { $('l-msg').textContent = e.message; $('l-ok').disabled = false; $('l-ok').textContent = 'Entrar'; }
   });
   $('l-ok').onclick = ir;
-  $('l-user').onkeydown = (e) => e.key === 'Enter' && $('l-pass').focus();
-  $('l-pass').onkeydown = (e) => e.key === 'Enter' && ir();
+  $('l-user').onkeydown = (e) => { if (e.key === 'Enter') $('l-pass').focus(); };
+  $('l-pass').onkeydown = (e) => { if (e.key === 'Enter') ir(); };
   $('l-user').focus();
 }
 async function sair() {
@@ -377,7 +377,7 @@ async function vHist() {
       : `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · CT ${esc(r.ct)}</span><span>${fmt(r.reposicao, 0)} L</span></div><div class="v">${r.concentracao != null ? `<span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span>` : ''}${r.ph != null ? `<span>pH <b>${fmt(r.ph, 1)}</b></span>` : ''}<span>${esc(r.turno || 'sem turno')}</span><span>${esc(r.responsavel)}</span></div></button>`).join('')}</div>`;
     box.innerHTML = sum + tab + itens;
     const abre = (id) => { const r = d.registros.find((x) => x.id === +id); isCF ? editaCF(r, lista) : editaOleo(o, r, lista); };
-    box.querySelectorAll('[data-id]').forEach((b) => { b.onclick = () => abre(b.dataset.id); if (b.tagName === 'TR') b.onkeydown = (e) => e.key === 'Enter' && abre(b.dataset.id); });
+    box.querySelectorAll('[data-id]').forEach((b) => { b.onclick = () => abre(b.dataset.id); if (b.tagName === 'TR') b.onkeydown = (e) => { if (e.key === 'Enter') abre(b.dataset.id); }; });
   }
 }
 const rodapeEdicao = `<div class="msg" id="sh-msg"></div><div class="row"><button class="btn" id="sv">Salvar</button></div><div class="row mt"><button class="btn ghost" id="dl" style="color:var(--red)">Excluir registro</button></div>`;
