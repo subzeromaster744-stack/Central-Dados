@@ -14,24 +14,36 @@ const store = {
   set(k, v, s = localStorage) { try { v == null ? s.removeItem(k) : s.setItem(k, JSON.stringify(v)); } catch {} },
 };
 const diasAtras = (n) => { const d = new Date(CFG.hoje + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
+// "hoje", "ontem", "há 5 dias" ou a data
+const quando = (s) => {
+  if (!s) return '';
+  const n = Math.round((Date.parse(CFG.hoje + 'T12:00:00Z') - Date.parse(s + 'T12:00:00Z')) / 864e5);
+  return n <= 0 ? 'hoje' : n === 1 ? 'ontem' : n < 30 ? `há ${n} dias` : br(s);
+};
 
 let CFG = { hoje: new Date().toISOString().slice(0, 10) };
 let ME = store.get('cd-perfil'); // { nome, dep, turno }
 let view = { v: 'menu' }, pilha = [], cfD = null;
 const cache = {};
 const app = $('app'), ttl = $('ttl'), back = $('back'), layer = $('layer'), meBtn = $('me');
+try { const a = sessionStorage.getItem('cd-admin'); if (a && !localStorage.getItem('cd-admin')) localStorage.setItem('cd-admin', a); sessionStorage.removeItem('cd-admin'); } catch {}
+const isAdmin = () => !!store.get('cd-admin');
+
+// Cor de cada tela, para reconhecer de relance
+const COR = { cf: '#0e7490', 6002: '#2456b8', 2001: '#6d28d9', houghto: '#c2410c', mql: '#475569', diagrind: '#a16207', microcut: '#15803d' };
+const gota = (k) => `<span class="gota" style="--c:${COR[k] || '#2456b8'}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2.6c-3.4 4.5-7 8.4-7 12.1a7 7 0 0 0 14 0c0-3.7-3.6-7.6-7-12.1z" fill="currentColor"/><path d="M8.6 15.2a3.4 3.4 0 0 0 3.4 3.3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" opacity=".85"/></svg></span>`;
 
 // ---------- API ----------
 async function api(path, { method = 'GET', body } = {}) {
   const h = { 'content-type': 'application/json' };
   const k = store.get('cd-chave'); if (k) h['x-app-key'] = k;
-  const a = store.get('cd-admin', sessionStorage); if (a && path.startsWith('/api/admin')) h['x-admin-password'] = a;
+  const a = store.get('cd-admin'); if (a && path.startsWith('/api/admin')) h['x-admin-password'] = a;
   let res;
   try { res = await fetch(path, { method, headers: h, body: body ? JSON.stringify(body) : undefined }); }
   catch { throw new Error('Sem conexão. Verifique a internet e tente de novo.'); }
   const d = await res.json().catch(() => ({}));
   if (res.status === 401 && !path.startsWith('/api/admin')) { store.set('cd-chave', null); telaChave(d.erro); throw new Error(d.erro || 'Acesso negado.'); }
-  if (res.status === 401 && path.startsWith('/api/admin')) store.set('cd-admin', null, sessionStorage);
+  if (res.status === 401 && path.startsWith('/api/admin')) store.set('cd-admin', null);
   if (!res.ok) throw new Error(d.erro || 'Falha ao falar com o servidor.');
   return d;
 }
@@ -51,6 +63,11 @@ const maquinas = async (dep, novo) => (!novo && cache['mq' + dep]) || (cache['mq
 // "6,0 - 8,0" → [6, 8]
 const faixaDe = (t) => { const m = String(t || '').match(/(\d+(?:[.,]\d+)?)\s*[-–a]\s*(\d+(?:[.,]\d+)?)/); return m ? [num(m[1]), num(m[2])] : null; };
 const limpaCache = () => { for (const k in cache) delete cache[k]; };
+// Departamento de uma tela: quem não é admin só trabalha no próprio
+const depDaTela = (o) => {
+  const d = isAdmin() && view.dep ? view.dep : ME.dep;
+  return !o || o.deps.includes(d) ? d : null;
+};
 
 // ---------- navegação ----------
 function go(v, empilha = true) { if (empilha) pilha.push(view); view = v; app.dataset.h = ''; render(); window.scrollTo(0, 0); }
@@ -59,19 +76,27 @@ const home = () => { pilha = []; go({ v: 'menu' }, false); };
 meBtn.onclick = () => go({ v: 'perfil' });
 function titulo(t, sub) { ttl.innerHTML = esc(t) + (sub ? '<small>' + esc(sub) + '</small>' : ''); }
 async function render() {
-  document.body.classList.toggle('largo', view.v === 'info');
+  document.body.classList.toggle('largo', view.v === 'info' || view.v === 'hist');
   back.hidden = view.v === 'menu' || !ME;
   meBtn.hidden = !ME || view.v === 'perfil';
-  if (ME) meBtn.textContent = ME.nome.split(' ')[0] + ' · ' + ME.turno.replace(' Turno', '').replace('Turno ', '');
+  if (ME) meBtn.innerHTML = `<span class="av">${esc(ME.nome.trim()[0] || '?').toUpperCase()}</span><span class="mt">${esc(ME.nome.split(' ')[0])}${isAdmin() ? ' · admin' : ''}</span>`;
   const v = { menu: vMenu, perfil: vPerfil, cf: vCF, oil: vOil, ok: vOk, hist: vHist, admin: vAdmin, info: vInfo }[view.v];
   try { await v(); } catch (e) { app.innerHTML = `<div class="empty">${esc(e.message)}</div><div class="row mt"><button class="btn ghost" id="tenta">Tentar de novo</button></div>`; $('tenta').onclick = render; }
 }
 
 // ---------- campos e validação ----------
 const field = (id, label, input, req = 1, hint = '') => `<div class="f" id="w-${id}"><label for="${id}">${label}${req ? ' <i>*</i>' : ''}${hint ? ` <span class="hint">${hint}</span>` : ''}</label>${input}<div class="err" id="e-${id}"></div></div>`;
-const tNum = (id, v) => `<input id="${id}" inputmode="decimal" autocomplete="off" value="${esc(inNum(v))}">`;
+const tNum = (id, v, un = '') => `<div class="un"><input id="${id}" inputmode="decimal" autocomplete="off" value="${esc(inNum(v))}"${un ? ` style="padding-right:${16 + un.length * 11}px"` : ''}>${un ? `<span>${un}</span>` : ''}</div>`;
 const tData = (id, v) => `<input id="${id}" type="date" max="${CFG.hoje}" value="${esc(v || CFG.hoje)}">`;
 const sel = (id, opts, v, ph = 'Selecione') => `<select id="${id}"><option value="">${esc(ph)}</option>${opts.map((o) => { const [val, lab] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(val)}"${val === v ? ' selected' : ''}>${esc(lab)}</option>`; }).join('')}</select>`;
+// botões lado a lado no lugar de uma lista suspensa (o valor fica num campo escondido)
+const seg = (id, opts, v) => `<input type="hidden" id="${id}" value="${esc(v || '')}"><div class="seg" data-for="${id}" role="group">${opts.map((o) => { const [val, lab] = Array.isArray(o) ? o : [o, o]; return `<button type="button" data-v="${esc(val)}" class="${val === v ? 'on' : ''}" aria-pressed="${val === v}">${esc(lab)}</button>`; }).join('')}</div>`;
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.seg button'); if (!b) return;
+  const g = b.parentElement, inp = $(g.dataset.for); if (!inp) return;
+  g.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+  inp.value = b.dataset.v; inp.dispatchEvent(new Event('change'));
+});
 const val = (id) => $(id)?.value ?? '';
 const R = {
   data: (v) => (!v ? 'Informe a data.' : v > CFG.hoje ? 'A data não pode passar de hoje.' : ''),
@@ -100,84 +125,125 @@ async function ocupado(btn, txt, fn) {
   const b = $(btn), o = b.textContent; b.disabled = true; b.textContent = txt;
   try { await fn(); } catch (e) { toast(e.message, null, true); b.disabled = false; b.textContent = o; }
 }
+// faixa da máquina ao lado do valor digitado
+function statusFaixa(id, faixa, txt, un = '') {
+  const el = $(id + '-fx'); if (!el) return;
+  if (!faixa) { el.innerHTML = ''; return; }
+  const v = num(val(id));
+  const st = !isFinite(v) ? '' : v >= faixa[0] && v <= faixa[1] ? '<b class="ok">dentro</b>' : '<b class="fora">fora da faixa</b>';
+  el.innerHTML = `Faixa da máquina: ${esc(txt)}${un} ${st}`;
+}
 
 // ---------- telas de entrada ----------
 async function telaChave(msg) {
   titulo('Qualidade do óleo', 'Acesso');
   back.hidden = true; meBtn.hidden = true;
-  app.innerHTML = `<h2>Senha de acesso</h2><p class="hint" style="font-size:15px">Peça a senha ao responsável pelo app.</p>${field('k', 'Senha', '<input id="k" type="password" autocomplete="current-password">')}<div class="err" style="color:var(--red);font-weight:600;min-height:20px">${esc(msg || '')}</div><button class="btn" id="kb" style="width:100%">Entrar</button>`;
+  app.innerHTML = `<div class="card pad"><h2>Senha de acesso</h2><p class="hint" style="font-size:15px">Peça a senha ao responsável pelo app.</p>${field('k', 'Senha', '<input id="k" type="password" autocomplete="current-password">')}<div class="err" style="color:var(--red);font-weight:600;min-height:20px">${esc(msg || '')}</div><button class="btn" id="kb" style="width:100%">Entrar</button></div>`;
   const ir = () => { store.set('cd-chave', val('k')); limpaCache(); render(); };
   $('kb').onclick = ir; $('k').onkeydown = (e) => e.key === 'Enter' && ir(); $('k').focus();
 }
 function vPerfil() {
-  titulo(ME ? 'Seu perfil' : 'Bem-vindo', 'Usado em todos os seus registros');
+  titulo(ME ? 'Seu perfil' : 'Bem-vindo', ME ? 'Usado em todos os seus registros' : 'Qualidade do óleo');
   const p = ME || { nome: '', dep: '', turno: '' };
-  app.innerHTML = `${ME ? '' : '<p style="margin-top:0">Antes de começar, diga quem você é. Fica salvo neste aparelho.</p>'}
+  app.innerHTML = `<div class="card pad">${ME ? '' : '<p style="margin-top:0">Antes de começar, diga quem você é. Fica salvo neste aparelho.</p>'}
     ${field('p-nome', 'Seu nome', `<input id="p-nome" autocomplete="name" maxlength="80" value="${esc(p.nome)}">`)}
-    ${field('p-dep', 'Departamento', sel('p-dep', Object.entries(DEP).map(([k, d]) => [k, d.nome]), p.dep))}
-    ${field('p-tur', 'Turno', sel('p-tur', TURNOS, p.turno))}
-    <button class="btn" id="p-ok" style="width:100%">${ME ? 'Salvar' : 'Começar'}</button>`;
+    ${field('p-dep', 'Departamento', seg('p-dep', Object.entries(DEP).map(([k, d]) => [k, d.nome]), p.dep))}
+    ${field('p-tur', 'Turno', seg('p-tur', TURNOS, p.turno))}
+    <button class="btn" id="p-ok" style="width:100%">${ME ? 'Salvar' : 'Começar'}</button></div>
+    ${ME ? `<div class="card pad mt2"><h3 style="margin-top:0">Admin</h3>${isAdmin()
+      ? '<p class="hint" style="font-size:15px;margin-top:0">Você está como admin neste aparelho: vê as telas de todos os departamentos e a área de cadastro.</p><button class="btn ghost" id="p-sair" style="width:100%">Sair do admin</button>'
+      : `<p class="hint" style="font-size:15px;margin-top:0">Só para quem cuida dos cadastros.</p>${field('p-adm', 'Senha de admin', '<input id="p-adm" type="password" autocomplete="current-password">', 0)}<div class="err" id="p-adm-msg" style="color:var(--red);font-weight:600;min-height:20px"></div><button class="btn ghost" id="p-entrar" style="width:100%">Entrar como admin</button>`}</div>` : ''}`;
   live([['p-nome', R.req('O nome')], ['p-dep', R.req('O departamento')], ['p-tur', R.req('O turno')]], 'p-ok');
   $('p-ok').onclick = () => { ME = { nome: val('p-nome').trim(), dep: val('p-dep'), turno: val('p-tur') }; store.set('cd-perfil', ME); home(); };
+  if ($('p-sair')) $('p-sair').onclick = () => { store.set('cd-admin', null); toast('Você saiu do admin'); vPerfil(); };
+  if ($('p-entrar')) {
+    const ir = () => entrarAdmin('p-entrar', 'p-adm', 'p-adm-msg', () => { toast('Entrou como admin'); home(); });
+    $('p-entrar').onclick = ir; $('p-adm').onkeydown = (e) => e.key === 'Enter' && ir();
+  }
+}
+function entrarAdmin(btn, campo, msg, depois) {
+  return ocupado(btn, 'Entrando…', async () => {
+    store.set('cd-admin', val(campo));
+    try { await api('/api/admin/entrar', { method: 'POST' }); } catch (e) { store.set('cd-admin', null); $(msg).textContent = e.message; throw e; }
+    depois();
+  });
 }
 
-// ---------- menu ----------
+// ---------- início ----------
+function linhaTela(k, dep, nome, sub, alvo) {
+  return `<div class="lin"><button class="abre" data-go='${esc(JSON.stringify(alvo))}'>${gota(k)}<span class="tx"><b>${esc(nome)}</b><small>${sub}</small></span></button>
+    <button class="hist" data-go='${esc(JSON.stringify({ v: 'hist', id: k, dep }))}' aria-label="Histórico de ${esc(nome)}">Histórico</button></div>`;
+}
+function telasDe(dep, r) {
+  const c = r.cf;
+  const subCF = c ? `Último ${quando(c.data)} · pH ${fmt(c.ph, 1)} · ${fmt(c.concentracao, 1)}% · ${esc(c.descricao)}` : 'Nenhum registro ainda';
+  return `<div class="card lista">${linhaTela('cf', dep, 'Central de Fluidos', subCF, { v: 'cf', dep })}${OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
+    const l = r.mi[o.id];
+    return linhaTela(o.id, dep, o.nome, l ? `Último ${quando(l.data)} · CT ${esc(l.ct)}${l.concentracao != null ? ` · ${fmt(l.concentracao, 1)}%` : ''}` : 'Nenhum registro ainda', { v: 'oil', id: o.id, dep });
+  }).join('')}</div>`;
+}
 async function vMenu() {
   if (!ME) return go({ v: 'perfil' }, false);
-  titulo('Menu', DEP[ME.dep].nome);
-  const outros = Object.keys(DEP).filter((d) => d !== ME.dep);
-  const [r, ...ro] = await Promise.all([ME.dep, ...outros].map((d) => api('/api/resumo?dep=' + d)));
-  const tilesDe = (dep, res, cls) => OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
-    const l = res.mi[o.id];
-    return `<button class="tile${cls}" data-oil="${o.id}" data-dep="${dep}"><b>${esc(o.nome)}</b><span>${l ? `Último ${br(l.data)} · CT ${esc(l.ct)}${l.concentracao != null ? ` · ${fmt(l.concentracao, 1)}%` : ''}` : 'Sem registros'}</span></button>`;
-  }).join('');
-  const cfTile = (dep, c, cls) => `<button class="tile wide${cls}" data-go="cf" data-dep="${dep}"><b>Central de Fluidos</b><span>${c ? `Último ${br(c.data)} · pH ${fmt(c.ph, 1)} · ${fmt(c.concentracao, 1)}% · ${esc(c.descricao)}` : 'Sem registros'}</span></button>`;
-  const tiles = tilesDe(ME.dep, r, '');
-  const c = r.cf;
+  const adm = isAdmin();
+  titulo('Qualidade do óleo', adm ? 'Todos os departamentos' : DEP[ME.dep].nome);
+  const deps = adm ? [ME.dep, ...Object.keys(DEP).filter((d) => d !== ME.dep)] : [ME.dep];
+  const res = await Promise.all(deps.map((d) => api('/api/resumo?dep=' + d)));
   const avisos = [];
-  if (!r.cts) avisos.push('Nenhum CT cadastrado para este departamento. O admin precisa cadastrar antes dos registros de óleo.');
-  else if (r.ctsSemPreco) avisos.push(`${r.ctsSemPreco} CT(s) sem preço do óleo.`);
-  if (r.semPrecoCF.length) avisos.push(`Sem preço na Central: ${r.semPrecoCF.map(esc).join(', ')}.`);
-  app.innerHTML = `${avisos.length ? `<div class="warn">${avisos.join(' ')} <a href="#" id="toAdm" style="color:inherit;font-weight:700">Ajustar no Admin</a></div>` : ''}
-  <div class="tiles">
-    ${cfTile(ME.dep, c, '')}
-    ${tiles}
-    <button class="tile alt" data-go="info"><b>Informações</b><span>Máquinas, volumes e concentração alvo</span></button>
-    <button class="tile alt" data-go="admin"><b>Admin</b><span>CTs, preços e máquinas</span></button>
-  </div>
-  ${outros.map((d, i) => `<h3 class="outro">${esc(DEP[d].nome)}</h3><div class="tiles">${cfTile(d, ro[i].cf, ' out')}${tilesDe(d, ro[i], ' out')}</div>`).join('')}`;
-  app.querySelectorAll('[data-oil]').forEach((b) => (b.onclick = () => go({ v: 'oil', id: b.dataset.oil, dep: b.dataset.dep })));
-  app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { if (b.dataset.go === 'cf') cfD = null; go({ v: b.dataset.go, dep: b.dataset.dep }); }));
+  if (adm) deps.forEach((d, i) => {
+    const r = res[i], a = [];
+    if (!r.cts) a.push('nenhum CT cadastrado');
+    else if (r.ctsSemPreco) a.push(`${r.ctsSemPreco} CT(s) sem preço`);
+    if (r.semPrecoCF.length) a.push(`sem preço na Central: ${r.semPrecoCF.map(esc).join(', ')}`);
+    if (a.length) avisos.push(`<b>${esc(DEP[d].nome)}:</b> ${a.join('; ')}.`);
+  });
+  app.innerHTML = `<div class="ola"><div><h2>Olá, ${esc(ME.nome.split(' ')[0])}</h2><p>${esc(DEP[ME.dep].nome)} · ${esc(ME.turno)}</p></div><button class="btn ghost sm" id="trocar">Trocar</button></div>
+    ${avisos.length ? `<div class="warn">${avisos.join('<br>')} <a href="#" id="toAdm" style="color:inherit;font-weight:700">Ajustar no Admin</a></div>` : ''}
+    ${deps.map((d, i) => `<h3 class="sec">${adm ? esc(DEP[d].nome) : 'Registrar'}</h3>${telasDe(d, res[i])}`).join('')}
+    <h3 class="sec">Consultar</h3>
+    <div class="card lista">
+      <div class="lin"><button class="abre" data-go='{"v":"info"}'><span class="ico">i</span><span class="tx"><b>Informações das máquinas</b><small>Faixas de concentração e pH, fator de refração e volumes</small></span></button></div>
+      ${adm ? `<div class="lin"><button class="abre" data-go='{"v":"admin"}'><span class="ico">⚙</span><span class="tx"><b>Admin</b><small>CTs, preços, máquinas e importação</small></span></button></div>` : ''}
+    </div>
+    ${adm ? '' : '<p class="tag" style="text-align:center"><button class="link" id="souAdm">Entrar como admin</button></p>'}`;
+  app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { const v = JSON.parse(b.dataset.go); if (v.v === 'cf') cfD = null; go(v); }));
+  $('trocar').onclick = () => go({ v: 'perfil' });
+  if ($('souAdm')) $('souAdm').onclick = () => go({ v: 'perfil' });
   if ($('toAdm')) $('toAdm').onclick = (e) => { e.preventDefault(); go({ v: 'admin' }); };
 }
+const foraDoDep = (nome) => {
+  app.innerHTML = `<div class="empty">${esc(nome)} não é usado em ${esc(DEP[ME.dep].nome)}.</div><div class="row mt"><button class="btn ghost" id="mn">Voltar ao início</button></div>`;
+  $('mn').onclick = home;
+};
+const aviso = (D) => (D !== ME.dep ? `<div class="warn">Lançando para <b>${esc(DEP[D].nome)}</b>, que não é o departamento do seu perfil.</div>` : '');
 
 // ---------- Central de Fluidos (3 etapas) ----------
 async function vCF() {
-  const D = view.dep || ME.dep;
+  const D = depDaTela(null);
   titulo('Central de Fluidos', DEP[D].nome);
   const pr = await precos(D);
   if (!cfD) cfD = { step: 1, data: CFG.hoje, turno: ME.turno, ph: '', concentracao: '', produto: '', descricao: '', consumo: '', observacoes: '' };
   const s = cfD.step;
-  const bar = `<div class="steps">${[1, 2, 3].map((i) => `<div class="${i <= s ? 'on' : ''}"></div>`).join('')}</div>`;
+  const passos = `<ol class="passos">${['Data e turno', 'Parâmetros', 'Consumo'].map((t, i) => `<li class="${i + 1 < s ? 'feito' : i + 1 === s ? 'on' : ''}"><span>${i + 1 < s ? '✓' : i + 1}</span>${t}</li>`).join('')}</ol>`;
   let body, regras;
   if (s === 1) {
-    body = `<h2>1. Data e turno</h2>${field('c-data', 'Data', tData('c-data', cfD.data))}${field('c-tur', 'Turno', sel('c-tur', TURNOS, cfD.turno))}`;
+    body = `${field('c-data', 'Data', tData('c-data', cfD.data))}${field('c-tur', 'Turno', seg('c-tur', TURNOS, cfD.turno))}`;
     regras = [['c-data', R.data], ['c-tur', R.req('O turno')]];
   } else if (s === 2) {
-    body = `<h2>2. Parâmetros do fluido</h2><div class="grid2">${field('c-ph', 'pH', tNum('c-ph', cfD.ph), 1, CF_PH.join(' a '))}${field('c-conc', 'Concentração (%)', tNum('c-conc', cfD.concentracao), 1, CF_CONC.join(' a '))}</div>`;
+    body = `<div class="grid2">${field('c-ph', 'pH', tNum('c-ph', cfD.ph), 1, CF_PH.join(' a '))}${field('c-conc', 'Concentração', tNum('c-conc', cfD.concentracao, '%'), 1, CF_CONC.join(' a ') + '%')}</div>`;
     regras = [['c-ph', R.faixa('O pH', CF_PH)], ['c-conc', R.faixa('A concentração', CF_CONC)]];
   } else {
+    const descs = cfD.produto ? PROD[cfD.produto][D] : [];
+    if (descs.length === 1 && !cfD.descricao) cfD.descricao = descs[0];
     const un = cfD.produto ? PROD[cfD.produto].un : '';
-    body = `<h2>3. Consumo</h2>${field('c-prod', 'Produto', sel('c-prod', Object.keys(PROD), cfD.produto))}
-      ${field('c-desc', 'Descrição do produto', sel('c-desc', cfD.produto ? PROD[cfD.produto][D] : [], cfD.descricao, cfD.produto ? 'Selecione' : 'Escolha o produto primeiro'))}
-      ${field('c-cons', `Consumo${un ? ' (' + un + ')' : ''}`, tNum('c-cons', cfD.consumo))}
+    body = `${field('c-prod', 'Produto', seg('c-prod', Object.keys(PROD).map((p) => [p, p.replace(/ \(.*\)$/, '')]), cfD.produto))}
+      ${cfD.produto ? field('c-desc', 'Qual?', seg('c-desc', descs, cfD.descricao)) : '<input type="hidden" id="c-desc" value=""><div id="w-c-desc"><div class="err" id="e-c-desc"></div></div>'}
+      ${field('c-cons', 'Consumo', tNum('c-cons', cfD.consumo, un))}
       <div class="cost"><span>Custo estimado<small id="c-unit"></small></span><b id="c-cost">—</b></div>
-      ${field('c-obs', 'Observações', `<textarea id="c-obs" maxlength="1000">${esc(cfD.observacoes)}</textarea>`, 0)}`;
+      ${field('c-obs', 'Observações', `<textarea id="c-obs" maxlength="1000" placeholder="Opcional">${esc(cfD.observacoes)}</textarea>`, 0)}`;
     regras = [['c-prod', R.req('O produto')], ['c-desc', R.req('A descrição')], ['c-cons', R.pos('O consumo')]];
   }
-  app.innerHTML = bar + (D !== ME.dep ? `<div class="warn">Lançando para <b>${esc(DEP[D].nome)}</b>, que não é o departamento do seu perfil.</div>` : '') + `<div class="chips"><span class="chip">${esc(ME.nome)}</span><span class="chip">${esc(DEP[D].nome)}</span></div>` + body +
-    `<div class="row mt">${s > 1 ? '<button class="btn ghost" id="prev">Voltar</button>' : ''}<button class="btn" id="nx">${s < 3 ? 'Prosseguir' : 'Enviar'}</button></div>
-     <div class="row mt"><button class="btn ghost" id="toH">Histórico</button></div>`;
+  app.innerHTML = passos + aviso(D) + `<div class="card pad">${body}</div>
+    <div class="acoes">${s > 1 ? '<button class="btn ghost" id="prev">Voltar</button>' : `<button class="btn ghost" id="toH">Histórico</button>`}<button class="btn" id="nx">${s < 3 ? 'Continuar' : 'Enviar registro'}</button></div>`;
   const pega = () => { for (const [k, id] of [['data', 'c-data'], ['turno', 'c-tur'], ['ph', 'c-ph'], ['concentracao', 'c-conc'], ['produto', 'c-prod'], ['descricao', 'c-desc'], ['consumo', 'c-cons'], ['observacoes', 'c-obs']]) if ($(id)) cfD[k] = $(id).value; };
   const custo = () => {
     if (!$('c-cost')) return;
@@ -187,40 +253,38 @@ async function vCF() {
   };
   live(regras, 'nx', custo);
   if (s === 3) { $('c-prod').addEventListener('change', () => { pega(); cfD.descricao = ''; vCF(); }); $('c-obs').oninput = pega; }
-  $('toH').onclick = () => { pega(); go({ v: 'hist', id: 'cf', dep: D }); };
+  if ($('toH')) $('toH').onclick = () => { pega(); go({ v: 'hist', id: 'cf', dep: D }); };
   if (s > 1) $('prev').onclick = () => { pega(); cfD.step--; vCF(); };
   $('nx').onclick = () => {
     pega();
-    if (s < 3) { cfD.step++; vCF(); return; }
+    if (s < 3) { cfD.step++; vCF(); window.scrollTo(0, 0); return; }
     ocupado('nx', 'Enviando…', async () => {
       await api('/api/cf', { method: 'POST', body: { ...cfD, departamento: D, responsavel: ME.nome } });
       cfD = null;
-      go({ v: 'ok', msg: 'Registro da Central de Fluidos enviado', novo: { v: 'cf', dep: D }, hist: { v: 'hist', id: 'cf', dep: D } });
+      go({ v: 'ok', k: 'cf', msg: 'Central de Fluidos', novo: { v: 'cf', dep: D }, hist: { v: 'hist', id: 'cf', dep: D } });
     });
   };
 }
 
 // ---------- formulário único dos óleos ----------
-function oilCampos(o, lista, r) {
+function oilCampos(o, lista, r, maqs = []) {
   const opts = lista.map((c) => c.ct);
   if (r && !opts.includes(r.ct)) opts.unshift(r.ct);
-  return field('o-data', 'Data', tData('o-data', r?.data)) +
-    field('o-ct', 'CT', sel('o-ct', opts, r?.ct)) + '<div id="o-maq" class="tag" style="margin:-8px 0 14px"></div>' +
-    `<div class="grid2">${o.conc ? field('o-conc', 'Concentração (%)', tNum('o-conc', r?.concentracao), 1, o.conc.join(' a ')) : ''}${o.ph ? field('o-ph', 'pH', tNum('o-ph', r?.ph), 1, PH.join(' a ')) : ''}${field('o-rep', 'Reposição de óleo (L)', tNum('o-rep', r?.reposicao))}</div>` +
-    (r ? field('o-tur', 'Turno', sel('o-tur', TURNOS, r.turno)) : '') +
+  const rot = (ct) => { const m = maqs.find((x) => x.ct === ct); return [ct, m ? `${ct} — ${m.maquina}` : ct]; };
+  return field('o-ct', 'Máquina (CT)', sel('o-ct', opts.map(rot), r?.ct, 'Escolha o CT')) + '<div id="o-maq"></div>' +
+    `<div class="grid2">${o.conc ? field('o-conc', 'Concentração', tNum('o-conc', r?.concentracao, '%'), 1) + '' : ''}${o.ph ? field('o-ph', 'pH', tNum('o-ph', r?.ph), 1) : ''}</div>` +
+    field('o-rep', 'Reposição de óleo', tNum('o-rep', r?.reposicao, 'L')) +
+    `<div class="grid2">${field('o-data', 'Data', tData('o-data', r?.data))}${r ? field('o-tur', 'Turno', sel('o-tur', TURNOS, r.turno)) : ''}</div>` +
     `<div class="cost"><span>Custo da reposição<small id="o-unit">Escolha o CT</small></span><b id="o-cost">—</b></div>`;
 }
-const oilRegras = (o) => [['o-data', R.data], ['o-ct', R.req('O CT')], ...(o.conc ? [['o-conc', R.faixa('A concentração', o.conc)]] : []), ...(o.ph ? [['o-ph', R.faixa('O pH', PH)]] : []), ['o-rep', R.pos('A reposição')], ...($('o-tur') ? [['o-tur', R.req('O turno')]] : [])];
+const oilRegras = (o) => [['o-ct', R.req('O CT')], ...(o.conc ? [['o-conc', R.faixa('A concentração', o.conc)]] : []), ...(o.ph ? [['o-ph', R.faixa('O pH', PH)]] : []), ['o-rep', R.pos('A reposição')], ['o-data', R.data], ...($('o-tur') ? [['o-tur', R.req('O turno')]] : [])];
 const oilCusto = (lista, r, maqs = []) => () => {
   const mq = maqs.find((m) => m.ct === val('o-ct'));
-  const box = $('o-maq');
-  if (box) {
-    const fc = faixaDe(mq?.concentracao), fp = faixaDe(mq?.ph);
-    const cv = num(val('o-conc')), pv = num(val('o-ph'));
-    const fora = [];
-    if (fc && $('o-conc') && isFinite(cv) && (cv < fc[0] || cv > fc[1])) fora.push(`concentração fora da faixa ${esc(mq.concentracao)}%`);
-    if (fp && $('o-ph') && isFinite(pv) && pv > 0 && (pv < fp[0] || pv > fp[1])) fora.push(`pH fora da faixa ${esc(mq.ph)}`);
-    box.innerHTML = mq ? `<b>${esc(mq.maquina)}</b>${mq.volume != null ? ` · ${fmt(mq.volume, 0)} L` : ''}${mq.concentracao ? ` · conc. ${esc(mq.concentracao)}%` : ''}${mq.ph ? ` · pH ${esc(mq.ph)}` : ''}${mq.fator != null ? ` · fator ${fmt(mq.fator, 2)}` : ''}${fora.length ? `<br><span style="color:var(--warn);font-weight:700">Atenção: ${fora.join(' e ')}.</span>` : ''}` : '';
+  if ($('o-maq')) $('o-maq').innerHTML = mq ? `<div class="maq"><b>${esc(mq.maquina)}</b><span>${[mq.secao, mq.volume != null ? fmt(mq.volume, 0) + ' L' : '', mq.fator != null ? 'fator de refração ' + fmt(mq.fator, 2) : ''].filter(Boolean).map(esc).join(' · ')}</span></div>` : '';
+  for (const [id, campo, un] of [['o-conc', 'concentracao', '%'], ['o-ph', 'ph', '']]) {
+    if (!$(id)) continue;
+    if (!$(id + '-fx')) $('e-' + id).insertAdjacentHTML('beforebegin', `<div class="fx" id="${id}-fx"></div>`);
+    statusFaixa(id, faixaDe(mq?.[campo]), mq?.[campo] || '', un);
   }
   const c = lista.find((x) => x.ct === val('o-ct')), q = num(val('o-rep'));
   const p = r && r.ct === val('o-ct') && r.preco > 0 ? r.preco : c?.preco;
@@ -231,38 +295,39 @@ const oilLe = (o) => ({ data: val('o-data'), ct: val('o-ct'), concentracao: o.co
 
 async function vOil() {
   const o = oleoPorId(view.id);
-  const D = view.dep && o.deps.includes(view.dep) ? view.dep : o.deps.includes(ME.dep) ? ME.dep : o.deps[0];
+  const D = depDaTela(o);
+  if (!D) { titulo(o.nome); return foraDoDep(o.nome); }
   titulo(o.nome, DEP[D].nome);
   const [lista, maqs] = await Promise.all([cts(D).then((l) => l.filter((c) => c.tipo === o.tipo)), maquinas(D).catch(() => [])]);
   if (!lista.length) {
-    app.innerHTML = `<div class="empty">Nenhum CT de ${esc(o.nome)} cadastrado em ${esc(DEP[D].nome)}.<br>O admin precisa cadastrar em Admin › Centros de trabalho.</div><div class="row mt"><button class="btn ghost" id="toH">Histórico</button><button class="btn ghost" id="toA">Admin</button></div>`;
-    $('toH').onclick = () => go({ v: 'hist', id: o.id, dep: D }); $('toA').onclick = () => go({ v: 'admin' });
+    app.innerHTML = `<div class="empty">Nenhum CT de ${esc(o.nome)} cadastrado em ${esc(DEP[D].nome)}.<br>Peça ao admin para cadastrar.</div><div class="row mt"><button class="btn ghost" id="toH">Ver histórico</button></div>`;
+    $('toH').onclick = () => go({ v: 'hist', id: o.id, dep: D });
     return;
   }
-  app.innerHTML = (D !== ME.dep ? `<div class="warn">Lançando para <b>${esc(DEP[D].nome)}</b>, que não é o departamento do seu perfil.</div>` : '') + `<div class="chips"><span class="chip">${esc(ME.nome)}</span><span class="chip">${esc(ME.turno)}</span><span class="chip">${esc(DEP[D].nome)}</span></div>` + oilCampos(o, lista) +
-    `<div class="row"><button class="btn" id="send">Enviar</button></div><div class="row mt"><button class="btn ghost" id="toH">Histórico</button></div>`;
+  app.innerHTML = aviso(D) + `<div class="card pad">${oilCampos(o, lista, null, maqs)}</div>
+    <div class="acoes"><button class="btn ghost" id="toH">Histórico</button><button class="btn" id="send">Enviar registro</button></div>`;
   live(oilRegras(o), 'send', oilCusto(lista, null, maqs));
   $('toH').onclick = () => go({ v: 'hist', id: o.id, dep: D });
   $('send').onclick = () => ocupado('send', 'Enviando…', async () => {
     await api('/api/mi', { method: 'POST', body: { ...oilLe(o), tipo: o.id, departamento: D, turno: ME.turno, responsavel: ME.nome } });
-    go({ v: 'ok', msg: `Registro de ${o.nome} enviado`, novo: { v: 'oil', id: o.id, dep: D }, hist: { v: 'hist', id: o.id, dep: D } });
+    go({ v: 'ok', k: o.id, msg: o.nome, novo: { v: 'oil', id: o.id, dep: D }, hist: { v: 'hist', id: o.id, dep: D } });
   });
 }
 
 function vOk() {
   titulo('Registro enviado');
-  app.innerHTML = `<div class="ok"><div class="mark">✓</div><h2>${esc(view.msg)}</h2><p class="hint" style="font-size:15px">Salvo às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.</p></div>
-  <div class="row"><button class="btn" id="a">Novo registro</button><button class="btn ghost" id="h">Histórico</button><button class="btn ghost" id="m">Menu</button></div>`;
+  app.innerHTML = `<div class="card pad ok"><div class="mark">✓</div><h2>Registro enviado</h2><p>${gota(view.k)} ${esc(view.msg)} · ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p></div>
+  <div class="acoes"><button class="btn ghost" id="m">Início</button><button class="btn ghost" id="h">Histórico</button><button class="btn" id="a">Novo registro</button></div>`;
   $('a').onclick = () => { pilha.pop(); go(view.novo, false); };
-  $('h').onclick = () => go(view.hist);
+  $('h').onclick = () => { pilha = [{ v: 'menu' }]; go(view.hist, false); };
   $('m').onclick = home;
 }
 
 // ---------- histórico ----------
-const PERIODOS = [['30', 'Últimos 30 dias'], ['90', 'Últimos 90 dias'], ['365', 'Último ano'], ['', 'Tudo']];
+const PERIODOS = [['30', '30 dias'], ['90', '90 dias'], ['365', '1 ano'], ['', 'Tudo']];
 function histDep() {
-  const o = view.id === 'cf' ? null : oleoPorId(view.id), d = view.dep || ME.dep;
-  return !o || o.deps.includes(d) ? d : o.deps[0];
+  const o = view.id === 'cf' ? null : oleoPorId(view.id);
+  return depDaTela(o) || ME.dep;
 }
 function histQuery() {
   const p = new URLSearchParams({ dep: histDep() });
@@ -274,19 +339,19 @@ function histQuery() {
 }
 async function vHist() {
   const isCF = view.id === 'cf', o = isCF ? null : oleoPorId(view.id);
+  if (o && !depDaTela(o)) { titulo(o.nome); return foraDoDep(o.nome); }
   const D = histDep();
-  titulo('Registros · ' + (isCF ? 'Central de Fluidos' : o.nome), DEP[D].nome);
-  if (app.dataset.h !== view.id + histDep() || !$('hq')) {
-    app.dataset.h = view.id + histDep();
-    app.innerHTML = `<div class="filt">${field('hq', `Buscar ${isCF ? 'produto, obs. ou nome' : 'CT ou nome'}`, `<input id="hq" autocomplete="off" value="${esc(view.q || '')}">`, 0)}${field('hp', 'Período', sel('hp', PERIODOS, view.per ?? '30', 'Período'))}</div>
+  titulo('Histórico · ' + (isCF ? 'Central de Fluidos' : o.nome), DEP[D].nome);
+  if (app.dataset.h !== view.id + D || !$('hq')) {
+    app.dataset.h = view.id + D;
+    app.innerHTML = `<div class="filt">${field('hq', 'Buscar', `<input id="hq" autocomplete="off" placeholder="${isCF ? 'Produto, observação ou nome' : 'CT ou nome'}" value="${esc(view.q || '')}">`, 0)}${field('hp', 'Período', seg('hp', PERIODOS, view.per ?? '30'), 0)}</div>
       <div id="hres"><div class="load">Carregando…</div></div>
-      <div class="row" style="margin-top:16px"><button class="btn" id="nv">Novo</button><button class="btn ghost" id="ex">Exportar Excel</button><button class="btn ghost" id="mn">Menu</button></div>
+      <div class="acoes"><button class="btn ghost" id="ex">Exportar Excel</button><button class="btn" id="nv">Novo registro</button></div>
       <p class="tag">Toque em um registro para editar ou excluir. Mostra até 200 registros; a exportação traz todos do período.</p>`;
     let t;
     $('hq').oninput = () => { clearTimeout(t); t = setTimeout(() => { view.q = val('hq').trim(); lista(); }, 300); };
     $('hp').onchange = () => { view.per = val('hp'); lista(); };
     $('nv').onclick = () => { if (isCF) cfD = null; go(isCF ? { v: 'cf', dep: D } : { v: 'oil', id: o.id, dep: D }); };
-    $('mn').onclick = home;
     $('ex').onclick = () => baixar(`/api/exportar/${isCF ? 'cf' : 'mi'}.csv?` + histQuery(), `${isCF ? 'central-de-fluidos' : 'oleo-' + o.id}-${D}-${CFG.hoje}.csv`);
   }
   await lista();
@@ -296,13 +361,19 @@ async function vHist() {
     try { d = await api(`/api/${isCF ? 'cf' : 'mi'}?` + histQuery()); }
     catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
     const t = d.totais;
-    const sum = isCF ? `<span><b>${t.n}</b> registros</span><span>Custo total <b>${brl(t.custo)}</b></span>`
-      : `<span><b>${t.n}</b> registros</span><span>Reposição <b>${fmt(t.litros, 0)} L</b></span><span>Custo <b>${brl(t.custo)}</b></span>`;
-    const itens = d.registros.map((r) => isCF
-      ? `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)}${r.turno ? ' · ' + esc(r.turno) : ''}</span><span>${esc(r.descricao)}</span></div><div class="v"><span>pH <b>${fmt(r.ph, 1)}</b></span><span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span><span>${esc(r.produto)} <b>${fmt(r.consumo, 0)}</b></span><span>${esc(r.responsavel)}</span>${r.preco > 0 ? `<span>${brl(r.consumo * r.preco)}</span>` : '<span>sem preço</span>'}${r.observacoes ? `<span>“${esc(r.observacoes)}”</span>` : ''}</div></button>`
-      : `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · CT ${esc(r.ct)}</span><span>${fmt(r.reposicao, 0)} L</span></div><div class="v">${r.concentracao != null ? `<span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span>` : ''}${r.ph != null ? `<span>pH <b>${fmt(r.ph, 1)}</b></span>` : ''}<span>${esc(r.turno || 'sem turno')}</span><span>${esc(r.responsavel)}</span><span>${r.preco > 0 ? brl(r.reposicao * r.preco) : 'sem preço'}</span></div></button>`).join('');
-    box.innerHTML = `<div class="sum">${sum}</div><div class="list">${itens || '<div class="empty">Nenhum registro neste período.</div>'}</div>`;
-    box.querySelectorAll('.item').forEach((b) => (b.onclick = () => { const r = d.registros.find((x) => x.id === +b.dataset.id); isCF ? editaCF(r, lista) : editaOleo(o, r, lista); }));
+    const sum = `<div class="kpis"><div><small>Registros</small><b>${t.n.toLocaleString('pt-BR')}</b></div>${isCF ? '' : `<div><small>Reposição</small><b>${fmt(t.litros, 0)} L</b></div>`}<div><small>Custo</small><b>${brl(t.custo)}</b></div></div>`;
+    if (!d.registros.length) { box.innerHTML = sum + '<div class="empty">Nenhum registro neste período.</div>'; return; }
+    const cab = isCF ? ['Data', 'Turno', 'pH', 'Conc.', 'Produto', 'Consumo', 'Custo', 'Responsável', 'Obs.'] : ['Data', 'CT', ...(o.conc ? ['Conc.'] : []), ...(o.ph ? ['pH'] : []), 'Reposição', 'Turno', 'Custo', 'Responsável'];
+    const lin = (r) => isCF
+      ? [br(r.data), r.turno || '—', fmt(r.ph, 1), fmt(r.concentracao, 1) + '%', r.descricao, fmt(r.consumo, 0) + ' ' + (PROD[r.produto]?.un || ''), r.preco > 0 ? brl(r.consumo * r.preco) : '—', r.responsavel, r.observacoes]
+      : [br(r.data), r.ct, ...(o.conc ? [r.concentracao != null ? fmt(r.concentracao, 1) + '%' : '—'] : []), ...(o.ph ? [r.ph != null ? fmt(r.ph, 1) : '—'] : []), fmt(r.reposicao, 0) + ' L', r.turno || '—', r.preco > 0 ? brl(r.reposicao * r.preco) : '—', r.responsavel];
+    const tab = `<div class="card tabela"><table><thead><tr>${cab.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${d.registros.map((r) => `<tr data-id="${r.id}" tabindex="0">${lin(r).map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    const itens = `<div class="card lista regs">${d.registros.map((r) => isCF
+      ? `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)}${r.turno ? ' · ' + esc(r.turno) : ''}</span><span>${esc(r.descricao)} ${fmt(r.consumo, 0)}</span></div><div class="v"><span>pH <b>${fmt(r.ph, 1)}</b></span><span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span><span>${esc(r.responsavel)}</span>${r.observacoes ? `<span>“${esc(r.observacoes)}”</span>` : ''}</div></button>`
+      : `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · CT ${esc(r.ct)}</span><span>${fmt(r.reposicao, 0)} L</span></div><div class="v">${r.concentracao != null ? `<span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span>` : ''}${r.ph != null ? `<span>pH <b>${fmt(r.ph, 1)}</b></span>` : ''}<span>${esc(r.turno || 'sem turno')}</span><span>${esc(r.responsavel)}</span></div></button>`).join('')}</div>`;
+    box.innerHTML = sum + tab + itens;
+    const abre = (id) => { const r = d.registros.find((x) => x.id === +id); isCF ? editaCF(r, lista) : editaOleo(o, r, lista); };
+    box.querySelectorAll('[data-id]').forEach((b) => { b.onclick = () => abre(b.dataset.id); if (b.tagName === 'TR') b.onkeydown = (e) => e.key === 'Enter' && abre(b.dataset.id); });
   }
 }
 const rodapeEdicao = `<div class="msg" id="sh-msg"></div><div class="row"><button class="btn" id="sv">Salvar</button></div><div class="row mt"><button class="btn ghost" id="dl" style="color:var(--red)">Excluir registro</button></div>`;
@@ -323,7 +394,7 @@ async function salvaFolha(fn) {
 }
 async function editaOleo(o, r, recarrega) {
   const [lista, maqs] = await Promise.all([cts(r.departamento).then((l) => l.filter((c) => c.tipo === o.tipo)), maquinas(r.departamento).catch(() => [])]);
-  folha('Editar registro', `<p class="hint" style="margin-top:0">Lançado por ${esc(r.responsavel)}${r.alterado_em ? ' · já editado' : ''}</p>` + oilCampos(o, lista, r) + rodapeEdicao, () => {
+  folha('Editar registro', `<p class="hint" style="margin-top:0">Lançado por ${esc(r.responsavel)}${r.alterado_em ? ' · já editado' : ''}</p>` + oilCampos(o, lista, r, maqs) + rodapeEdicao, () => {
     live(oilRegras(o), 'sv', oilCusto(lista, r, maqs));
     $('sv').onclick = () => salvaFolha(async () => {
       await api('/api/mi/' + r.id, { method: 'PUT', body: { ...oilLe(o), turno: val('o-tur') } });
@@ -334,13 +405,19 @@ async function editaOleo(o, r, recarrega) {
 }
 function editaCF(r, recarrega) {
   const dk = r.departamento;
-  const descs = (p) => (p ? PROD[p][dk] : []);
+  const descs = (p) => (p ? PROD[p][dk].concat(p === r.produto && !PROD[p][dk].includes(r.descricao) ? [r.descricao] : []) : []);
   folha('Editar registro da Central', `<p class="hint" style="margin-top:0">Lançado por ${esc(r.responsavel)}${r.alterado_em ? ' · já editado' : ''}</p>
-    <div class="grid2">${field('e-data', 'Data', tData('e-data', r.data))}${field('e-tur', 'Turno', sel('e-tur', TURNOS, r.turno))}${field('e-ph', 'pH', tNum('e-ph', r.ph), 1, CF_PH.join(' a '))}${field('e-conc', 'Concentração (%)', tNum('e-conc', r.concentracao), 1, CF_CONC.join(' a '))}</div>
-    ${field('e-prod', 'Produto', sel('e-prod', Object.keys(PROD), r.produto))}${field('e-desc', 'Descrição', sel('e-desc', descs(r.produto), r.descricao))}
-    ${field('e-cons', 'Consumo', tNum('e-cons', r.consumo))}${field('e-obs', 'Observações', `<textarea id="e-obs" maxlength="1000">${esc(r.observacoes)}</textarea>`, 0)}` + rodapeEdicao, () => {
-    const run = live([['e-data', R.data], ['e-tur', R.req('O turno')], ['e-ph', R.faixa('O pH', CF_PH)], ['e-conc', R.faixa('A concentração', CF_CONC)], ['e-prod', R.req('O produto')], ['e-desc', R.req('A descrição')], ['e-cons', R.pos('O consumo')]], 'sv');
-    $('e-prod').addEventListener('change', () => { $('e-desc').innerHTML = '<option value="">Selecione</option>' + descs(val('e-prod')).map((d) => `<option>${esc(d)}</option>`).join(''); run(); });
+    <div class="grid2">${field('e-data', 'Data', tData('e-data', r.data))}${field('e-tur', 'Turno', sel('e-tur', TURNOS, r.turno))}${field('e-ph', 'pH', tNum('e-ph', r.ph), 1, CF_PH.join(' a '))}${field('e-conc', 'Concentração', tNum('e-conc', r.concentracao, '%'), 1, CF_CONC.join(' a ') + '%')}</div>
+    ${field('e-prod', 'Produto', seg('e-prod', Object.keys(PROD).map((p) => [p, p.replace(/ \(.*\)$/, '')]), r.produto))}<div id="e-desc-box">${field('e-desc', 'Qual?', seg('e-desc', descs(r.produto), r.descricao))}</div>
+    ${field('e-cons', 'Consumo', tNum('e-cons', r.consumo, PROD[r.produto]?.un || ''))}${field('e-obs', 'Observações', `<textarea id="e-obs" maxlength="1000">${esc(r.observacoes)}</textarea>`, 0)}` + rodapeEdicao, () => {
+    const regras = [['e-data', R.data], ['e-tur', R.req('O turno')], ['e-ph', R.faixa('O pH', CF_PH)], ['e-conc', R.faixa('A concentração', CF_CONC)], ['e-prod', R.req('O produto')], ['e-desc', R.req('A descrição')], ['e-cons', R.pos('O consumo')]];
+    const run = live(regras, 'sv');
+    $('e-prod').addEventListener('change', () => {
+      const ds = descs(val('e-prod'));
+      $('e-desc-box').innerHTML = field('e-desc', 'Qual?', seg('e-desc', ds, ds.length === 1 ? ds[0] : ''));
+      $('e-desc').addEventListener('change', run);
+      run();
+    });
     $('sv').onclick = () => salvaFolha(async () => {
       await api('/api/cf/' + r.id, { method: 'PUT', body: { data: val('e-data'), turno: val('e-tur'), ph: val('e-ph'), concentracao: val('e-conc'), produto: val('e-prod'), descricao: val('e-desc'), consumo: val('e-cons'), observacoes: val('e-obs') } });
       layer.innerHTML = ''; recarrega(); toast('Registro atualizado');
@@ -352,13 +429,9 @@ function editaCF(r, recarrega) {
 // ---------- admin ----------
 async function vAdmin() {
   titulo('Admin', DEP[view.dep || ME.dep].nome);
-  if (!store.get('cd-admin', sessionStorage)) {
-    app.innerHTML = `<h2>Entrar como admin</h2>${field('ap', 'Senha de admin', '<input id="ap" type="password" autocomplete="current-password">')}<div class="err" id="ap-msg" style="color:var(--red);font-weight:600;min-height:20px"></div><button class="btn" id="ab" style="width:100%">Entrar</button>`;
-    const ir = () => ocupado('ab', 'Entrando…', async () => {
-      store.set('cd-admin', val('ap'), sessionStorage);
-      try { await api('/api/admin/entrar', { method: 'POST' }); } catch (e) { store.set('cd-admin', null, sessionStorage); $('ap-msg').textContent = e.message; throw new Error(e.message); }
-      vAdmin();
-    });
+  if (!isAdmin()) {
+    app.innerHTML = `<div class="card pad"><h2>Entrar como admin</h2>${field('ap', 'Senha de admin', '<input id="ap" type="password" autocomplete="current-password">')}<div class="err" id="ap-msg" style="color:var(--red);font-weight:600;min-height:20px"></div><button class="btn" id="ab" style="width:100%">Entrar</button></div>`;
+    const ir = () => entrarAdmin('ab', 'ap', 'ap-msg', () => { render(); });
     $('ab').onclick = ir; $('ap').onkeydown = (e) => e.key === 'Enter' && ir(); $('ap').focus();
     return;
   }
@@ -368,7 +441,7 @@ async function vAdmin() {
     <div class="row" style="margin-top:22px"><button class="btn ghost" id="sair">Sair do admin</button></div>`;
   app.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { view.tab = b.dataset.t; vAdmin(); }));
   $('a-dep').onchange = () => { view.dep = val('a-dep') || ME.dep; vAdmin(); };
-  $('sair').onclick = () => { store.set('cd-admin', null, sessionStorage); home(); };
+  $('sair').onclick = () => { store.set('cd-admin', null); home(); };
   const box = $('adm');
   if (tab === 'ct') return admCTs(box, dep);
   if (tab === 'pr') return admPrecos(box, dep);
@@ -549,7 +622,7 @@ async function vInfo() {
   const rows = (await api('/api/maquinas' + (f ? '?dep=' + f : ''))).filter((m) => !q || [m.ct, m.maquina, m.secao, m.oleo].join(' ').toLowerCase().includes(q));
   app.innerHTML = `${field('i-dep', 'Departamento', `<select id="i-dep"><option value="">Todos</option>${Object.entries(DEP).map(([k, d]) => `<option value="${k}"${k === f ? ' selected' : ''}>${d.nome}</option>`).join('')}</select>`, 0)}
     ${field('i-q', 'Buscar CT, máquina ou óleo', `<input id="i-q" autocomplete="off" value="${esc(view.iq || '')}">`, 0)}
-    ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>CT</th><th>Máquina</th><th>Seção</th><th>Produto</th><th class="n">Volume</th><th>Conc. (%)</th><th>pH</th><th class="n">Fator</th><th class="n">Vol. p/ montagem</th></tr></thead><tbody>${rows.map((m) => `<tr><td>${esc(m.ct)}</td><td>${esc(m.maquina)}</td><td class="nw">${esc(m.secao)}</td><td>${esc(m.oleo)}</td><td class="n">${m.volume != null ? fmt(m.volume, 0) + ' L' : ''}</td><td class="nw">${esc(m.concentracao)}</td><td class="nw">${esc(m.ph)}</td><td class="n">${m.fator != null ? fmt(m.fator, 2) : ''}</td><td class="n">${m.volume != null && m.conc_ref != null ? fmt(m.volume * m.conc_ref / 100, 1) + ' L' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${q ? 'Nada encontrado.' : 'Nenhuma máquina cadastrada. O admin cadastra em Admin › Máquinas.'}</div>`}
+    ${rows.length ? `<div class="card scroll" style="padding:4px 8px"><table class="stack"><thead><tr><th>CT</th><th>Máquina</th><th>Seção</th><th>Produto</th><th class="n">Volume</th><th>Conc. (%)</th><th>pH</th><th class="n">Fator</th><th class="n">Vol. p/ montagem</th></tr></thead><tbody>${rows.map((m) => `<tr><td>${esc(m.ct)}</td><td>${esc(m.maquina)}</td><td class="nw">${esc(m.secao)}</td><td>${esc(m.oleo)}</td><td class="n">${m.volume != null ? fmt(m.volume, 0) + ' L' : ''}</td><td class="nw">${esc(m.concentracao)}</td><td class="nw">${esc(m.ph)}</td><td class="n">${m.fator != null ? fmt(m.fator, 2) : ''}</td><td class="n">${m.volume != null && m.conc_ref != null ? fmt(m.volume * m.conc_ref / 100, 1) + ' L' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${q ? 'Nada encontrado.' : 'Nenhuma máquina cadastrada. O admin cadastra em Admin › Máquinas.'}</div>`}
     <p class="tag">Volume p/ montagem = volume × concentração de referência ÷ 100.</p>`;
   $('i-dep').onchange = () => { view.f = val('i-dep'); vInfo(); };
   let t; $('i-q').oninput = () => { clearTimeout(t); t = setTimeout(() => { view.iq = val('i-q'); const p = $('i-q').selectionStart; vInfo().then(() => { $('i-q').focus(); $('i-q').setSelectionRange(p, p); }); }, 250); };

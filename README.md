@@ -6,7 +6,8 @@ Ele roda na Cloudflare (Worker com arquivos estáticos) e guarda os dados no ban
 
 ## O que tem
 
-- **Perfil:** cada pessoa informa nome, departamento e turno uma vez, e isso fica salvo no aparelho.
+- **Perfil:** cada pessoa informa nome, departamento e turno uma vez, e isso fica salvo no aparelho. Cada um vê só as telas do seu departamento.
+- **Admin:** quem entra com a senha de admin (no perfil) vê as telas de todos os departamentos, separadas, e a área de cadastro.
 - **Central de Fluidos:** 3 etapas (data e turno → pH e concentração → produto e consumo), com o custo calculado na hora.
 - **Máquinas individuais:** uma tela para os 6 óleos (6002, 2001, Houghto 5089, MQL, Diagrind 535, Microcut 515). O preço vem do CT cadastrado.
 - **Histórico:**
