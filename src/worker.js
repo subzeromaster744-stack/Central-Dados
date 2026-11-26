@@ -437,18 +437,19 @@ async function admin(req, env, seg, m) {
   if (seg[0] === 'maquinas') {
     const le = async () => {
       const b = await corpo(req);
-      const vol = b.volume === '' || b.volume == null ? null : naoNegativo('O volume', b.volume);
-      return [exigeDep(b.departamento), texto(b.secao, 60), texto(b.ct, 30), texto(b.maquina, 80), texto(b.oleo, 60), vol, texto(b.concentracao, 30)];
+      const opc = (nome, v) => (v === '' || v == null ? null : naoNegativo(nome, v));
+      return [exigeDep(b.departamento), texto(b.secao, 60), texto(b.ct, 30), texto(b.maquina, 80), texto(b.oleo, 60), opc('O volume', b.volume), texto(b.concentracao, 30),
+        opc('A concentração de referência', b.conc_ref), texto(b.ph, 30), opc('O fator de refração', b.fator)];
     };
     if (m === 'POST' && seg.length === 1) {
       const v = await le();
       if (!v[2] && !v[3]) falha(400, 'Informe ao menos o CT ou o nome da máquina.');
-      const r = await env.DB.prepare('INSERT INTO maquinas (departamento, secao, ct, maquina, oleo, volume, concentracao) VALUES (?,?,?,?,?,?,?) RETURNING *').bind(...v).first();
+      const r = await env.DB.prepare('INSERT INTO maquinas (departamento, secao, ct, maquina, oleo, volume, concentracao, conc_ref, ph, fator) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING *').bind(...v).first();
       return json(r, 201);
     }
     const id = +seg[1];
     if (m === 'PUT' && Number.isInteger(id)) {
-      const r = await env.DB.prepare('UPDATE maquinas SET departamento=?, secao=?, ct=?, maquina=?, oleo=?, volume=?, concentracao=? WHERE id=? RETURNING *').bind(...(await le()), id).first();
+      const r = await env.DB.prepare('UPDATE maquinas SET departamento=?, secao=?, ct=?, maquina=?, oleo=?, volume=?, concentracao=?, conc_ref=?, ph=?, fator=? WHERE id=? RETURNING *').bind(...(await le()), id).first();
       if (!r) falha(404, 'Máquina não encontrada.');
       return json(r);
     }

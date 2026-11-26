@@ -84,3 +84,5 @@ td .x{width:40px;height:40px;border-radius:8px;border:1px solid var(--line);back
 pre.res{white-space:pre-wrap;font-size:13px;background:var(--soft);padding:10px;border-radius:10px}
 @media(max-width:600px){table{font-size:13px}.stack thead{display:none}.stack tr{display:grid;padding-block:10px;border-bottom:1px solid var(--line)}.stack td{display:flow-root;border:0;padding:3px 0;padding-inline-start:8em;text-align:start}.stack td::before{content:attr(data-l);float:inline-start;width:7.5em;margin-inline-start:-8em;white-space:normal;color:var(--mut)}.stack td:empty{display:none}.stack td input{max-width:none;text-align:left}}
 @media(prefers-reduced-motion:reduce){.tile{transition:none}}
+body.largo main,body.largo .top .in{max-width:1120px}
+td.nw{white-space:nowrap}

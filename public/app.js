@@ -47,6 +47,9 @@ async function baixar(path, nome) {
 }
 const cts = async (dep, novo) => (!novo && cache['cts' + dep]) || (cache['cts' + dep] = await api('/api/cts?dep=' + dep));
 const precos = async (dep, novo) => (!novo && cache['pr' + dep]) || (cache['pr' + dep] = await api('/api/precos?dep=' + dep));
+const maquinas = async (dep, novo) => (!novo && cache['mq' + dep]) || (cache['mq' + dep] = await api('/api/maquinas?dep=' + dep));
+// "6,0 - 8,0" → [6, 8]
+const faixaDe = (t) => { const m = String(t || '').match(/(\d+(?:[.,]\d+)?)\s*[-–a]\s*(\d+(?:[.,]\d+)?)/); return m ? [num(m[1]), num(m[2])] : null; };
 const limpaCache = () => { for (const k in cache) delete cache[k]; };
 
 // ---------- navegação ----------
@@ -56,6 +59,7 @@ const home = () => { pilha = []; go({ v: 'menu' }, false); };
 meBtn.onclick = () => go({ v: 'perfil' });
 function titulo(t, sub) { ttl.innerHTML = esc(t) + (sub ? '<small>' + esc(sub) + '</small>' : ''); }
 async function render() {
+  document.body.classList.toggle('largo', view.v === 'info');
   back.hidden = view.v === 'menu' || !ME;
   meBtn.hidden = !ME || view.v === 'perfil';
   if (ME) meBtn.textContent = ME.nome.split(' ')[0] + ' · ' + ME.turno.replace(' Turno', '').replace('Turno ', '');
@@ -196,13 +200,23 @@ function oilCampos(o, lista, r) {
   const opts = lista.map((c) => c.ct);
   if (r && !opts.includes(r.ct)) opts.unshift(r.ct);
   return field('o-data', 'Data', tData('o-data', r?.data)) +
-    field('o-ct', 'CT', sel('o-ct', opts, r?.ct)) +
+    field('o-ct', 'CT', sel('o-ct', opts, r?.ct)) + '<div id="o-maq" class="tag" style="margin:-8px 0 14px"></div>' +
     `<div class="grid2">${o.conc ? field('o-conc', 'Concentração (%)', tNum('o-conc', r?.concentracao), 1, o.conc.join(' a ')) : ''}${o.ph ? field('o-ph', 'pH', tNum('o-ph', r?.ph), 1, PH.join(' a ')) : ''}${field('o-rep', 'Reposição de óleo (L)', tNum('o-rep', r?.reposicao))}</div>` +
     (r ? field('o-tur', 'Turno', sel('o-tur', TURNOS, r.turno)) : '') +
     `<div class="cost"><span>Custo da reposição<small id="o-unit">Escolha o CT</small></span><b id="o-cost">—</b></div>`;
 }
 const oilRegras = (o) => [['o-data', R.data], ['o-ct', R.req('O CT')], ...(o.conc ? [['o-conc', R.faixa('A concentração', o.conc)]] : []), ...(o.ph ? [['o-ph', R.faixa('O pH', PH)]] : []), ['o-rep', R.pos('A reposição')], ...($('o-tur') ? [['o-tur', R.req('O turno')]] : [])];
-const oilCusto = (lista, r) => () => {
+const oilCusto = (lista, r, maqs = []) => () => {
+  const mq = maqs.find((m) => m.ct === val('o-ct'));
+  const box = $('o-maq');
+  if (box) {
+    const fc = faixaDe(mq?.concentracao), fp = faixaDe(mq?.ph);
+    const cv = num(val('o-conc')), pv = num(val('o-ph'));
+    const fora = [];
+    if (fc && $('o-conc') && isFinite(cv) && (cv < fc[0] || cv > fc[1])) fora.push(`concentração fora da faixa ${esc(mq.concentracao)}%`);
+    if (fp && $('o-ph') && isFinite(pv) && pv > 0 && (pv < fp[0] || pv > fp[1])) fora.push(`pH fora da faixa ${esc(mq.ph)}`);
+    box.innerHTML = mq ? `<b>${esc(mq.maquina)}</b>${mq.volume != null ? ` · ${fmt(mq.volume, 0)} L` : ''}${mq.concentracao ? ` · conc. ${esc(mq.concentracao)}%` : ''}${mq.ph ? ` · pH ${esc(mq.ph)}` : ''}${mq.fator != null ? ` · fator ${fmt(mq.fator, 2)}` : ''}${fora.length ? `<br><span style="color:var(--warn);font-weight:700">Atenção: ${fora.join(' e ')}.</span>` : ''}` : '';
+  }
   const c = lista.find((x) => x.ct === val('o-ct')), q = num(val('o-rep'));
   const p = r && r.ct === val('o-ct') && r.preco > 0 ? r.preco : c?.preco;
   $('o-cost').textContent = p > 0 && isFinite(q) ? brl(p * q) : '—';
@@ -213,7 +227,7 @@ const oilLe = (o) => ({ data: val('o-data'), ct: val('o-ct'), concentracao: o.co
 async function vOil() {
   const o = oleoPorId(view.id);
   titulo(o.nome, DEP[ME.dep].nome);
-  const lista = (await cts(ME.dep)).filter((c) => c.tipo === o.tipo);
+  const [lista, maqs] = await Promise.all([cts(ME.dep).then((l) => l.filter((c) => c.tipo === o.tipo)), maquinas(ME.dep).catch(() => [])]);
   if (!lista.length) {
     app.innerHTML = `<div class="empty">Nenhum CT de ${esc(o.nome)} cadastrado em ${esc(DEP[ME.dep].nome)}.<br>O admin precisa cadastrar em Admin › Centros de trabalho.</div><div class="row mt"><button class="btn ghost" id="toH">Histórico</button><button class="btn ghost" id="toA">Admin</button></div>`;
     $('toH').onclick = () => go({ v: 'hist', id: o.id }); $('toA').onclick = () => go({ v: 'admin' });
@@ -221,7 +235,7 @@ async function vOil() {
   }
   app.innerHTML = `<div class="chips"><span class="chip">${esc(ME.nome)}</span><span class="chip">${esc(ME.turno)}</span><span class="chip">${esc(DEP[ME.dep].nome)}</span></div>` + oilCampos(o, lista) +
     `<div class="row"><button class="btn" id="send">Enviar</button></div><div class="row mt"><button class="btn ghost" id="toH">Histórico</button></div>`;
-  live(oilRegras(o), 'send', oilCusto(lista));
+  live(oilRegras(o), 'send', oilCusto(lista, null, maqs));
   $('toH').onclick = () => go({ v: 'hist', id: o.id });
   $('send').onclick = () => ocupado('send', 'Enviando…', async () => {
     await api('/api/mi', { method: 'POST', body: { ...oilLe(o), tipo: o.id, departamento: ME.dep, turno: ME.turno, responsavel: ME.nome } });
@@ -297,9 +311,9 @@ async function salvaFolha(fn) {
   try { await fn(); } catch (e) { $('sh-msg').textContent = e.message; b.disabled = false; b.textContent = 'Salvar'; }
 }
 async function editaOleo(o, r, recarrega) {
-  const lista = (await cts(ME.dep)).filter((c) => c.tipo === o.tipo);
+  const [lista, maqs] = await Promise.all([cts(ME.dep).then((l) => l.filter((c) => c.tipo === o.tipo)), maquinas(ME.dep).catch(() => [])]);
   folha('Editar registro', `<p class="hint" style="margin-top:0">Lançado por ${esc(r.responsavel)}${r.alterado_em ? ' · já editado' : ''}</p>` + oilCampos(o, lista, r) + rodapeEdicao, () => {
-    live(oilRegras(o), 'sv', oilCusto(lista, r));
+    live(oilRegras(o), 'sv', oilCusto(lista, r, maqs));
     $('sv').onclick = () => salvaFolha(async () => {
       await api('/api/mi/' + r.id, { method: 'PUT', body: { ...oilLe(o), turno: val('o-tur') } });
       layer.innerHTML = ''; recarrega(); toast('Registro atualizado');
@@ -404,21 +418,24 @@ async function admPrecos(box, dep) {
 async function admMaquinas(box, dep) {
   const lista = await api('/api/maquinas?dep=' + dep);
   box.innerHTML = `<button class="btn" id="mq-n" style="width:100%">Adicionar máquina</button><h3>Máquinas</h3>
-    ${lista.length ? `<div class="list">${lista.map((m) => `<button class="item" data-id="${m.id}"><div class="h"><span>${esc(m.maquina || '—')}</span><span>CT ${esc(m.ct || '—')}</span></div><div class="v"><span>${esc(m.secao)}</span><span>${esc(m.oleo)}</span>${m.volume != null ? `<span><b>${fmt(m.volume, 0)} L</b></span>` : ''}${m.concentracao ? `<span>Alvo ${esc(m.concentracao)}</span>` : ''}</div></button>`).join('')}</div>` : '<div class="empty">Nenhuma máquina cadastrada neste departamento.</div>'}`;
+    ${lista.length ? `<div class="list">${lista.map((m) => `<button class="item" data-id="${m.id}"><div class="h"><span>${esc(m.maquina || '—')}</span><span>CT ${esc(m.ct || '—')}</span></div><div class="v"><span>${esc(m.secao)}</span><span>${esc(m.oleo)}</span>${m.volume != null ? `<span><b>${fmt(m.volume, 0)} L</b></span>` : ''}${m.concentracao ? `<span>Conc. ${esc(m.concentracao)}%</span>` : ''}${m.ph ? `<span>pH ${esc(m.ph)}</span>` : ''}${m.fator != null ? `<span>Fator ${fmt(m.fator, 2)}</span>` : ''}</div></button>`).join('')}</div>` : '<div class="empty">Nenhuma máquina cadastrada neste departamento.</div>'}`;
   const recarrega = () => admMaquinas(box, dep);
   const abre = (m) => folha(m ? 'Editar máquina' : 'Nova máquina', `
     ${field('m-maq', 'Máquina', `<input id="m-maq" maxlength="80" value="${esc(m?.maquina)}">`)}
     <div class="grid2">${field('m-ct', 'CT', `<input id="m-ct" maxlength="30" value="${esc(m?.ct)}">`, 0)}${field('m-sec', 'Seção', `<input id="m-sec" maxlength="60" value="${esc(m?.secao)}">`, 0)}</div>
     ${field('m-oleo', 'Óleo', `<input id="m-oleo" maxlength="60" list="m-oleos" value="${esc(m?.oleo)}"><datalist id="m-oleos">${OLEOS.map((o) => `<option value="${esc(o.nome)}">`).join('')}</datalist>`, 0)}
-    <div class="grid2">${field('m-vol', 'Volume (L)', tNum('m-vol', m?.volume), 0)}${field('m-conc', 'Concentração alvo', `<input id="m-conc" maxlength="30" placeholder="ex.: 5 a 7%" value="${esc(m?.concentracao)}">`, 0)}</div>
+    <div class="grid2">${field('m-vol', 'Volume (L)', tNum('m-vol', m?.volume), 0)}${field('m-conc', 'Faixa de concentração (%)', `<input id="m-conc" maxlength="30" placeholder="ex.: 6,0 - 8,0" value="${esc(m?.concentracao)}">`, 0)}
+    ${field('m-cref', 'Conc. de referência (%)', tNum('m-cref', m?.conc_ref), 0, 'para o volume de montagem')}${field('m-ph', 'Faixa de pH', `<input id="m-ph" maxlength="30" placeholder="ex.: 8,9 - 9,5" value="${esc(m?.ph)}">`, 0)}
+    ${field('m-fat', 'Fator de refração', tNum('m-fat', m?.fator), 0)}</div>
     <div class="msg" id="sh-msg"></div><div class="row"><button class="btn" id="sv">Salvar</button></div>${m ? '<div class="row mt"><button class="btn ghost" id="dl" style="color:var(--red)">Remover máquina</button></div>' : ''}`, () => {
-    live([['m-maq', R.req('O nome da máquina')], ['m-vol', (v) => (v === '' ? '' : R.pos('O volume')(v))]], 'sv');
+    const opc = (n) => (v) => (v === '' ? '' : R.pos(n)(v));
+    live([['m-maq', R.req('O nome da máquina')], ['m-vol', opc('O volume')], ['m-cref', opc('A concentração')], ['m-fat', opc('O fator')]], 'sv');
     $('sv').onclick = () => salvaFolha(async () => {
-      const body = { departamento: dep, maquina: val('m-maq'), ct: val('m-ct'), secao: val('m-sec'), oleo: val('m-oleo'), volume: val('m-vol') === '' ? null : num(val('m-vol')), concentracao: val('m-conc') };
+      const body = { departamento: dep, maquina: val('m-maq'), ct: val('m-ct'), secao: val('m-sec'), oleo: val('m-oleo'), volume: val('m-vol') === '' ? null : num(val('m-vol')), concentracao: val('m-conc'), conc_ref: val('m-cref') === '' ? null : num(val('m-cref')), ph: val('m-ph'), fator: val('m-fat') === '' ? null : num(val('m-fat')) };
       await api('/api/admin/maquinas' + (m ? '/' + m.id : ''), { method: m ? 'PUT' : 'POST', body });
-      layer.innerHTML = ''; recarrega(); toast(m ? 'Máquina atualizada' : 'Máquina adicionada');
+      delete cache['mq' + dep]; layer.innerHTML = ''; recarrega(); toast(m ? 'Máquina atualizada' : 'Máquina adicionada');
     });
-    if (m) $('dl').onclick = () => ocupado('dl', 'Removendo…', async () => { await api('/api/admin/maquinas/' + m.id, { method: 'DELETE' }); layer.innerHTML = ''; recarrega(); toast('Máquina removida'); });
+    if (m) $('dl').onclick = () => ocupado('dl', 'Removendo…', async () => { await api('/api/admin/maquinas/' + m.id, { method: 'DELETE' }); delete cache['mq' + dep]; layer.innerHTML = ''; recarrega(); toast('Máquina removida'); });
   });
   $('mq-n').onclick = () => abre(null);
   box.querySelectorAll('.item').forEach((b) => (b.onclick = () => abre(lista.find((x) => x.id === +b.dataset.id))));
@@ -517,10 +534,14 @@ function admHistorico(box) {
 async function vInfo() {
   titulo('Informações', 'Máquinas e fluidos');
   const f = view.f ?? ME.dep;
-  const rows = await api('/api/maquinas' + (f ? '?dep=' + f : ''));
+  const q = (view.iq || '').toLowerCase();
+  const rows = (await api('/api/maquinas' + (f ? '?dep=' + f : ''))).filter((m) => !q || [m.ct, m.maquina, m.secao, m.oleo].join(' ').toLowerCase().includes(q));
   app.innerHTML = `${field('i-dep', 'Departamento', `<select id="i-dep"><option value="">Todos</option>${Object.entries(DEP).map(([k, d]) => `<option value="${k}"${k === f ? ' selected' : ''}>${d.nome}</option>`).join('')}</select>`, 0)}
-    ${rows.length ? `<table class="stack"><thead><tr><th>CT</th><th>Máquina</th><th>Seção</th><th>Óleo</th><th class="n">Volume</th><th>Conc. alvo</th></tr></thead><tbody>${rows.map((m) => `<tr><td>${esc(m.ct)}</td><td>${esc(m.maquina)}</td><td>${esc(m.secao)}</td><td>${esc(m.oleo)}</td><td class="n">${m.volume != null ? fmt(m.volume, 0) + ' L' : ''}</td><td>${esc(m.concentracao)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Nenhuma máquina cadastrada. O admin cadastra em Admin › Máquinas.</div>'}`;
+    ${field('i-q', 'Buscar CT, máquina ou óleo', `<input id="i-q" autocomplete="off" value="${esc(view.iq || '')}">`, 0)}
+    ${rows.length ? `<div class="scroll"><table class="stack"><thead><tr><th>CT</th><th>Máquina</th><th>Seção</th><th>Produto</th><th class="n">Volume</th><th>Conc. (%)</th><th>pH</th><th class="n">Fator</th><th class="n">Vol. p/ montagem</th></tr></thead><tbody>${rows.map((m) => `<tr><td>${esc(m.ct)}</td><td>${esc(m.maquina)}</td><td class="nw">${esc(m.secao)}</td><td>${esc(m.oleo)}</td><td class="n">${m.volume != null ? fmt(m.volume, 0) + ' L' : ''}</td><td class="nw">${esc(m.concentracao)}</td><td class="nw">${esc(m.ph)}</td><td class="n">${m.fator != null ? fmt(m.fator, 2) : ''}</td><td class="n">${m.volume != null && m.conc_ref != null ? fmt(m.volume * m.conc_ref / 100, 1) + ' L' : ''}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${q ? 'Nada encontrado.' : 'Nenhuma máquina cadastrada. O admin cadastra em Admin › Máquinas.'}</div>`}
+    <p class="tag">Volume p/ montagem = volume × concentração de referência ÷ 100.</p>`;
   $('i-dep').onchange = () => { view.f = val('i-dep'); vInfo(); };
+  let t; $('i-q').oninput = () => { clearTimeout(t); t = setTimeout(() => { view.iq = val('i-q'); const p = $('i-q').selectionStart; vInfo().then(() => { $('i-q').focus(); $('i-q').setSelectionRange(p, p); }); }, 250); };
 }
 
 // ---------- folha e aviso ----------
