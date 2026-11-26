@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "central-dados",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "central-dados",
+      "database_id": "a299e41d-78cf-46f0-96ff-41cec52f4627",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": { "enabled": true }
+  // Secrets (configure no painel da Cloudflare, não aqui):
+  //   ADMIN_PASSWORD  senha da área de admin
+  //   APP_PASSWORD    opcional: senha de acesso para todos
+}
