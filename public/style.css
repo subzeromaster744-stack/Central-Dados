@@ -86,3 +86,6 @@ pre.res{white-space:pre-wrap;font-size:13px;background:var(--soft);padding:10px;
 @media(prefers-reduced-motion:reduce){.tile{transition:none}}
 body.largo main,body.largo .top .in{max-width:1120px}
 td.nw{white-space:nowrap}
+.tile.out{background:var(--card);color:var(--blueD);border:2px solid var(--blue)}
+h3.outro{margin:30px 0 4px}
+h3.outro+.tiles{margin-top:10px}
