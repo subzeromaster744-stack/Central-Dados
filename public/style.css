@@ -211,3 +211,16 @@ h3.sec{color:var(--blue);font-size:17px}
 .btn{border-radius:6px}
 .seg button,.escolha,.card,.kpis div,.f input,.f select,.f textarea{border-radius:6px}
 @media(max-width:420px){.me{border:0;background:none;padding:0}}
+
+/* tema escolhido pela pessoa (Minha conta); sem escolha segue o celular */
+:root[data-theme=light]{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark}
+/* PWA: respeita o entalhe e a barra do celular quando aberto como app */
+.top{padding-top:calc(6px + env(safe-area-inset-top));padding-left:max(3vw,10px,env(safe-area-inset-left));padding-right:max(3vw,10px,env(safe-area-inset-right))}
+main{padding-bottom:calc(40px + env(safe-area-inset-bottom))}
+.toast{bottom:calc(18px + env(safe-area-inset-bottom))}
+.toast.novo{top:calc(12px + env(safe-area-inset-top))}
+.offline{position:sticky;top:0;z-index:4;background:#5d6675;color:#fff;text-align:center;font-size:14px;font-weight:600;padding:6px 10px}
+.rodape{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:26px}
+.rodape .btn{flex:0 1 220px;min-height:44px;font-size:15px;margin:0}
+.rodape .btn.sair{margin:0}

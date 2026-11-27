@@ -8,6 +8,8 @@ Ele roda na Cloudflare (Worker com arquivos estáticos) e guarda os dados no ban
 
 - **Usuários com senha:** o admin cria cada pessoa com usuário, senha provisória, departamento e turno (Admin › Usuários). No primeiro acesso a pessoa cria a própria senha; depois pode trocar em "Minha conta". Se esquecer, o admin redefine. Cada um vê só as telas do seu departamento; o admin vê todos, separados.
 - **Fundidos I e II:** quem é de Fundidos escolhe no menu se está em Fundidos I ou II (fica salvo no aparelho e dá para trocar no próprio formulário). Os CTs mostrados são só os daquela usinagem, e o registro guarda a seção; o histórico filtra por Todas, I ou II.
+- **App no celular (PWA):** pode ser instalado na tela inicial (Android: menu do Chrome › Instalar app; iPhone: Safari › Compartilhar › Adicionar à Tela de Início). Abre em tela cheia e as telas carregam mesmo sem internet; os envios precisam de conexão.
+- **Tema:** claro, escuro ou automático (Minha conta), e um atalho no fim do menu.
 - **Primeiro acesso do admin:** usuário `admin` com a senha do Secret `ADMIN_PASSWORD`. Essa combinação sempre funciona, para recuperar o acesso se a senha do admin for esquecida.
 - **Central de Fluidos:** 3 etapas (data e turno → pH e concentração → produto e consumo), com o custo calculado na hora.
 - **Máquinas individuais:** uma tela para os 6 óleos (6002, 2001, Houghto 5089, MQL, Diagrind 535, Microcut 515). O preço vem do CT cadastrado.

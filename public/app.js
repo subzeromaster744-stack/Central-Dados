@@ -87,6 +87,27 @@ const secaoTela = (dep) => (multiSecao(dep) ? (DEP[dep].secoes.includes(view.sec
 const subtitulo = (dep, s) => DEP[dep].nome + (multiSecao(dep) && s ? ' · ' + SECOES[s].replace('Fundidos ', '') : '');
 const campoSecao = (id, dep, v) => (multiSecao(dep) ? field(id, 'Usinagem', seg(id, DEP[dep].secoes.map((x) => [x, SECOES[x]]), v)) : '');
 
+// ---------- tema e instalação (PWA) ----------
+const TEMAS = [['light', 'Claro'], ['dark', 'Escuro'], ['auto', 'Automático']];
+const temaAtual = () => store.get('cd-tema') || 'auto';
+const temaEfetivo = () => { const t = temaAtual(); return t === 'auto' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : t; };
+function aplicaTema(t) {
+  store.set('cd-tema', t === 'auto' ? null : t);
+  if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+}
+let pedidoInstalar = null;
+const instalado = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+const ehIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); pedidoInstalar = e; if (view.v === 'menu' && ME) render(); });
+window.addEventListener('appinstalled', () => { pedidoInstalar = null; toast('App instalado'); });
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+function faixaOffline() {
+  let f = document.querySelector('.offline');
+  if (navigator.onLine) { f?.remove(); return; }
+  if (!f) { f = document.createElement('div'); f.className = 'offline'; f.textContent = 'Sem internet: os registros não podem ser enviados agora.'; document.querySelector('.top').after(f); }
+}
+window.addEventListener('online', faixaOffline); window.addEventListener('offline', faixaOffline);
+
 // ---------- navegação ----------
 function go(v, empilha = true) { if (empilha) pilha.push(view); view = v; app.dataset.h = ''; render(); window.scrollTo(0, 0); }
 back.onclick = () => { layer.innerHTML = ''; view = pilha.pop() || { v: 'menu' }; app.dataset.h = ''; render(); };
@@ -192,7 +213,11 @@ function vConta() {
       ${field('s-nova', 'Nova senha', '<input id="s-nova" type="password" autocomplete="new-password">', 1, 'mínimo 4 caracteres')}
       ${field('s-conf', 'Repita a nova senha', '<input id="s-conf" type="password" autocomplete="new-password">')}
       <button class="btn" id="s-ok" style="width:100%">Salvar senha</button></div>
+    ${novo ? '' : `<div class="card pad mt2"><h3 style="margin-top:0">Aparência</h3>${field('s-tema', 'Tema', seg('s-tema', TEMAS, temaAtual()), 0)}
+      ${instalado() ? '' : `<h3>Instalar no celular</h3><p class="hint" style="font-size:15px;margin:0">${ehIOS() ? 'No iPhone, abra no Safari, toque em <b>Compartilhar</b> e depois em <b>Adicionar à Tela de Início</b>.' : 'No Android, toque no menu do Chrome (⋮) e em <b>Instalar app</b> ou <b>Adicionar à tela inicial</b>.'} O app abre em tela cheia, com ícone próprio.</p>${pedidoInstalar ? '<button class="btn mt" id="s-inst" style="width:100%">Instalar agora</button>' : ''}`}</div>`}
     <button class="btn ghost sair" id="s-sair">Sair / trocar de usuário</button>`;
+  if ($('s-tema')) $('s-tema').addEventListener('change', () => aplicaTema(val('s-tema')));
+  if ($('s-inst')) $('s-inst').onclick = async () => { pedidoInstalar.prompt(); await pedidoInstalar.userChoice.catch(() => {}); pedidoInstalar = null; vConta(); };
   live([...(novo ? [] : [['s-atual', R.req('A senha atual')]]), ['s-nova', (v) => (v.length < 4 ? 'A senha precisa ter pelo menos 4 caracteres.' : '')], ['s-conf', (v) => (v !== val('s-nova') ? 'As senhas não são iguais.' : '')]], 's-ok');
   $('s-ok').onclick = () => ocupado('s-ok', 'Salvando…', async () => {
     await api('/api/me/senha', { method: 'PUT', body: { atual: val('s-atual'), nova: val('s-nova') } });
@@ -219,7 +244,9 @@ async function vMenu() {
   const res = await Promise.all(deps.map((d) => api('/api/resumo?dep=' + d)));
   app.innerHTML = deps.map((d, i) => `${adm ? `<h3 class="sec">${esc(DEP[d].nome)}</h3>` : ''}${botoesDe(d, res[i])}`).join('') +
     `<div class="menu2"><button class="tile peq" data-go='{"v":"info"}'>Informações</button>${adm ? `<button class="tile peq" data-go='{"v":"admin"}'>Admin</button>` : ''}</div>
-    <button class="btn ghost sair" id="m-sair">Sair / trocar de usuário</button>`;
+    <div class="rodape">${pedidoInstalar && !instalado() ? '<button class="btn" id="m-inst">Instalar no celular</button>' : ''}<button class="btn ghost" id="m-tema">${temaEfetivo() === 'dark' ? 'Modo claro' : 'Modo escuro'}</button><button class="btn ghost sair" id="m-sair">Sair / trocar de usuário</button></div>`;
+  $('m-tema').onclick = () => { aplicaTema(temaEfetivo() === 'dark' ? 'light' : 'dark'); vMenu(); };
+  if ($('m-inst')) $('m-inst').onclick = async () => { pedidoInstalar.prompt(); await pedidoInstalar.userChoice.catch(() => {}); pedidoInstalar = null; vMenu(); };
   app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => {
     const v = JSON.parse(b.dataset.go), dep = b.dataset.dep;
     if (dep && multiSecao(dep)) {
@@ -721,6 +748,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') layer.inne
 
 // ---------- partida ----------
 (async () => {
+  faixaOffline();
   try { const r = await fetch('/api/config'); confereVersao(r); CFG = await r.json(); } catch {}
   if (!store.get('cd-token')) return vLogin();
   try { ME = deUsuario(await api('/api/me')); }
