@@ -187,3 +187,27 @@ h3.sec:first-child{margin-top:4px}
 .escolha.pisca{animation:pisca .5s 2}
 @keyframes pisca{50%{box-shadow:0 0 0 3px var(--warn)}}
 @media(prefers-reduced-motion:reduce){.escolha.pisca{animation:none;box-shadow:0 0 0 3px var(--warn)}}
+
+/* ===== visual do app antigo (Power App): barra azul, título no centro, botões azuis ===== */
+:root{--blue:#3860b2;--bg:light-dark(#fff,#0b0e13)}
+.top{background:var(--blue);border-bottom:0;color:#fff;padding:6px max(3vw,10px)}
+.top .in{display:grid;grid-template-columns:52px minmax(0,1fr) auto;min-height:56px;gap:8px}
+.top h1{text-align:center;color:#fff;font-weight:700;font-stretch:100%;font-size:clamp(20px,4.4vw,26px)}
+.top small{color:#ffffffd0}
+.back{grid-column:1;background:#ffffff22;border-color:#ffffff55;color:#fff}
+.top h1{grid-column:2}
+.me{grid-column:3;background:#ffffff22;border-color:#ffffff55;color:#fff}
+.me .av{background:#fff;color:var(--blue)}
+@media(max-width:420px){.me .mt{display:none}.me{padding:4px}}
+.tiles{gap:22px 18px;margin-top:10px}
+.tile{min-height:60px;padding:10px 12px;border-radius:6px;background:var(--blue);color:#fff;font-weight:700;font-size:17px;line-height:1.25;box-shadow:none;display:flex;align-items:center;justify-content:center;text-align:center}
+.tile:hover{background:#2f53a0}
+.tile:active{transform:translateY(1px)}
+.menu2{flex-direction:column;align-items:center;gap:14px;margin-top:28px}
+.menu2 .tile.peq{width:min(100%,240px);flex:none;min-height:44px;font-size:17px}
+.escolha{border-radius:8px}
+h3.sec{color:var(--blue);font-size:17px}
+.btn.sair{max-width:240px;min-height:44px;font-size:15px}
+.btn{border-radius:6px}
+.seg button,.escolha,.card,.kpis div,.f input,.f select,.f textarea{border-radius:6px}
+@media(max-width:420px){.me{border:0;background:none;padding:0}}

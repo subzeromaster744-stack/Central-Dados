@@ -205,9 +205,9 @@ function vConta() {
 // ---------- início ----------
 function botoesDe(dep, r) {
   const c = r.cf;
-  const b = (k, nome, sub, alvo, cls = '') => `<button class="tile${cls}" style="--c:${COR[k]}" data-dep="${dep}" data-go='${esc(JSON.stringify(alvo))}'><b>${esc(nome)}</b><span>${sub}</span></button>`;
+  const b = (k, nome, sub, alvo, cls = '') => `<button class="tile" data-dep="${dep}" data-go='${esc(JSON.stringify(alvo))}' title="${esc(sub)}">${esc(nome)}</button>`;
   const esc_ = multiSecao(dep) ? `<div class="escolha" id="esc-${dep}"><span>Qual usinagem?</span>${seg('m-sec-' + dep, DEP[dep].secoes.map((x) => [x, SECOES[x]]), secaoSalva(dep))}</div>` : '';
-  return `${esc_}<div class="tiles">${b('cf', 'Central de Fluidos', c ? `Último ${quando(c.data)}` : 'Sem registros', { v: 'cf', dep }, ' wide')}${OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
+  return `${esc_}<div class="tiles">${b('cf', 'Central de Fluidos', c ? `Último ${quando(c.data)}` : 'Sem registros', { v: 'cf', dep })}${OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
     const l = r.mi[o.id];
     return b(o.id, o.nome, l ? `Último ${quando(l.data)}` : 'Sem registros', { v: 'oil', id: o.id, dep });
   }).join('')}</div>`;
@@ -218,7 +218,7 @@ async function vMenu() {
   const deps = adm ? [ME.dep, ...Object.keys(DEP).filter((d) => d !== ME.dep)] : [ME.dep];
   const res = await Promise.all(deps.map((d) => api('/api/resumo?dep=' + d)));
   app.innerHTML = deps.map((d, i) => `${adm ? `<h3 class="sec">${esc(DEP[d].nome)}</h3>` : ''}${botoesDe(d, res[i])}`).join('') +
-    `<div class="menu2"><button class="btn ghost" data-go='{"v":"info"}'>Informações</button>${adm ? `<button class="btn ghost" data-go='{"v":"admin"}'>Admin</button>` : ''}</div>
+    `<div class="menu2"><button class="tile peq" data-go='{"v":"info"}'>Informações</button>${adm ? `<button class="tile peq" data-go='{"v":"admin"}'>Admin</button>` : ''}</div>
     <button class="btn ghost sair" id="m-sair">Sair / trocar de usuário</button>`;
   app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => {
     const v = JSON.parse(b.dataset.go), dep = b.dataset.dep;
