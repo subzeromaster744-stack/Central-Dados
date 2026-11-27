@@ -181,3 +181,9 @@ h3.sec:first-child{margin-top:4px}
 .regs-lista .item:first-child{border-top:0}
 .toast.novo{bottom:auto;top:12px;background:var(--blue);z-index:40}
 .toast.novo button{background:#fff;color:var(--blue)}
+.escolha{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 2px 12px;padding:10px 12px;border-radius:14px;background:var(--card);box-shadow:0 0 0 1px var(--line)}
+.escolha>span{font-weight:700}
+.escolha .seg button{min-height:42px}
+.escolha.pisca{animation:pisca .5s 2}
+@keyframes pisca{50%{box-shadow:0 0 0 3px var(--warn)}}
+@media(prefers-reduced-motion:reduce){.escolha.pisca{animation:none;box-shadow:0 0 0 3px var(--warn)}}

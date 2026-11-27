@@ -1,7 +1,7 @@
 // API do Central-Dados (registro da qualidade do óleo).
 // Tudo que começa com /api passa por aqui; o resto são os arquivos de /public.
 import {
-  DEPARTAMENTOS, TURNOS, OLEOS, PRODUTOS_CF, CF_PH, CF_CONC, PH, oleoPorId,
+  DEPARTAMENTOS, SECOES, TURNOS, OLEOS, PRODUTOS_CF, CF_PH, CF_CONC, PH, oleoPorId,
 } from '../public/config.js';
 
 // ---------- utilidades ----------
@@ -54,6 +54,14 @@ function data(v) {
   if (d > hojeBR()) falha(400, 'A data não pode passar de hoje.');
   return d;
 }
+// seção dentro do departamento; Eixos só tem uma
+function secaoDoDep(dep, v) {
+  const ss = DEPARTAMENTOS[dep].secoes;
+  if (ss.length === 1) return ss[0];
+  const s = texto(v, 40);
+  if (!ss.includes(s)) falha(400, 'Escolha Fundidos I ou Fundidos II.');
+  return s;
+}
 function turno(v) {
   const t = texto(v, 20);
   if (!TURNOS.includes(t)) falha(400, 'Turno inválido.');
@@ -70,6 +78,8 @@ function filtros(url, cols, u) {
   const where = ['excluido_em IS NULL'], args = [];
   const dep = podeDep(u, url.searchParams.get('dep'));
   where.push('departamento = ?'); args.push(dep);
+  const sec = url.searchParams.get('secao');
+  if (sec) { if (!DEPARTAMENTOS[dep].secoes.includes(sec)) falha(400, 'Seção inválida.'); where.push('secao = ?'); args.push(sec); }
   const de = url.searchParams.get('de'), ate = url.searchParams.get('ate');
   if (de && dataValida(de)) { where.push('data >= ?'); args.push(de); }
   if (ate && dataValida(ate)) { where.push('data <= ?'); args.push(ate); }
@@ -92,8 +102,11 @@ async function validaMI(env, b, atual) {
     if (!cad) falha(400, `O CT ${ct} não está cadastrado para ${o.nome}.`);
     if (!DEPARTAMENTOS[dep].secoes.includes(cad.departamento)) falha(400, `O CT ${ct} não é de ${DEPARTAMENTOS[dep].nome}.`);
   }
+  // a seção vem do CT; sem CT cadastrado (registro antigo), da escolha na tela
+  const secao = cad && DEPARTAMENTOS[dep].secoes.includes(cad.departamento) ? cad.departamento : secaoDoDep(dep, b.secao ?? atual?.secao);
+  if (b.secao && DEPARTAMENTOS[dep].secoes.length > 1 && b.secao !== secao) falha(400, `O CT ${ct} é de ${SECOES[secao]}, não de ${SECOES[b.secao] || b.secao}.`);
   const v = {
-    tipo: o.id, departamento: dep, data: data(b.data), ct,
+    tipo: o.id, departamento: dep, secao, data: data(b.data), ct,
     concentracao: o.conc ? faixa('A concentração', b.concentracao, o.conc) : null,
     ph: o.ph ? faixa('O pH', b.ph, PH) : null,
     reposicao: naoNegativo('A reposição', b.reposicao),
@@ -112,7 +125,7 @@ async function validaCF(env, b, atual) {
   const descricao = texto(b.descricao, 60);
   if (!PRODUTOS_CF[produto][dep].includes(descricao)) falha(400, `"${descricao}" não é uma descrição de ${produto} em ${DEPARTAMENTOS[dep].nome}.`);
   const v = {
-    departamento: dep, data: data(b.data), turno: turno(b.turno),
+    departamento: dep, secao: secaoDoDep(dep, b.secao ?? atual?.secao), data: data(b.data), turno: turno(b.turno),
     ph: faixa('O pH', b.ph, CF_PH), concentracao: faixa('A concentração', b.concentracao, CF_CONC),
     produto, descricao, consumo: naoNegativo('O consumo', b.consumo),
     observacoes: texto(b.observacoes, 1000),
@@ -319,8 +332,8 @@ async function api(req, env, url) {
       const b = await corpo(req);
       podeDep(u, b.departamento);
       const v = await validaMI(env, b);
-      const r = await env.DB.prepare(`INSERT INTO registros_mi (tipo, departamento, data, ct, concentracao, ph, reposicao, preco, turno, responsavel, criado_em)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.tipo, v.departamento, v.data, v.ct, v.concentracao, v.ph, v.reposicao, v.preco, v.turno, u.nome, agora()).first();
+      const r = await env.DB.prepare(`INSERT INTO registros_mi (tipo, departamento, secao, data, ct, concentracao, ph, reposicao, preco, turno, responsavel, criado_em)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.tipo, v.departamento, v.secao, v.data, v.ct, v.concentracao, v.ph, v.reposicao, v.preco, v.turno, u.nome, agora()).first();
       return json(r, 201);
     }
     const id = +seg[1];
@@ -331,8 +344,8 @@ async function api(req, env, url) {
     if (m === 'PUT' && seg.length === 2) {
       if (atual.excluido_em) falha(409, 'Esse registro foi excluído.');
       const v = await validaMI(env, { ...(await corpo(req)), tipo: atual.tipo, departamento: atual.departamento }, atual);
-      const r = await env.DB.prepare(`UPDATE registros_mi SET data=?, ct=?, concentracao=?, ph=?, reposicao=?, preco=?, turno=?, alterado_em=? WHERE id=? RETURNING *`)
-        .bind(v.data, v.ct, v.concentracao, v.ph, v.reposicao, v.preco, v.turno, agora(), id).first();
+      const r = await env.DB.prepare(`UPDATE registros_mi SET secao=?, data=?, ct=?, concentracao=?, ph=?, reposicao=?, preco=?, turno=?, alterado_em=? WHERE id=? RETURNING *`)
+        .bind(v.secao, v.data, v.ct, v.concentracao, v.ph, v.reposicao, v.preco, v.turno, agora(), id).first();
       return json(r);
     }
     if (m === 'DELETE' && seg.length === 2) {
@@ -361,8 +374,8 @@ async function api(req, env, url) {
       const b = await corpo(req);
       podeDep(u, b.departamento);
       const v = await validaCF(env, b);
-      const r = await env.DB.prepare(`INSERT INTO registros_cf (departamento, data, turno, ph, concentracao, produto, descricao, consumo, preco, observacoes, responsavel, criado_em)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.departamento, v.data, v.turno, v.ph, v.concentracao, v.produto, v.descricao, v.consumo, v.preco, v.observacoes, u.nome, agora()).first();
+      const r = await env.DB.prepare(`INSERT INTO registros_cf (departamento, secao, data, turno, ph, concentracao, produto, descricao, consumo, preco, observacoes, responsavel, criado_em)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *`).bind(v.departamento, v.secao, v.data, v.turno, v.ph, v.concentracao, v.produto, v.descricao, v.consumo, v.preco, v.observacoes, u.nome, agora()).first();
       return json(r, 201);
     }
     const id = +seg[1];
@@ -373,8 +386,8 @@ async function api(req, env, url) {
     if (m === 'PUT' && seg.length === 2) {
       if (atual.excluido_em) falha(409, 'Esse registro foi excluído.');
       const v = await validaCF(env, { ...(await corpo(req)), departamento: atual.departamento }, atual);
-      const r = await env.DB.prepare(`UPDATE registros_cf SET data=?, turno=?, ph=?, concentracao=?, produto=?, descricao=?, consumo=?, preco=?, observacoes=?, alterado_em=? WHERE id=? RETURNING *`)
-        .bind(v.data, v.turno, v.ph, v.concentracao, v.produto, v.descricao, v.consumo, v.preco, v.observacoes, agora(), id).first();
+      const r = await env.DB.prepare(`UPDATE registros_cf SET secao=?, data=?, turno=?, ph=?, concentracao=?, produto=?, descricao=?, consumo=?, preco=?, observacoes=?, alterado_em=? WHERE id=? RETURNING *`)
+        .bind(v.secao, v.data, v.turno, v.ph, v.concentracao, v.produto, v.descricao, v.consumo, v.preco, v.observacoes, agora(), id).first();
       return json(r);
     }
     if (m === 'DELETE' && seg.length === 2) {
@@ -394,15 +407,15 @@ async function api(req, env, url) {
     if (tipo) { if (!oleoPorId(tipo)) falha(400, 'Tipo de óleo inválido.'); f.where.push('tipo = ?'); f.args.push(tipo); }
     const r = await env.DB.prepare(`SELECT * FROM registros_mi WHERE ${f.where.join(' AND ')} ORDER BY data, id`).bind(...f.args).all();
     return csv(`maquinas-individuais-${f.dep}${tipo ? '-' + tipo : ''}.csv`,
-      ['ID', 'Data', 'Óleo', 'CT', 'Concentração (%)', 'pH', 'Reposição (L)', 'Preço (R$/L)', 'Custo (R$)', 'Turno', 'Responsável', 'Departamento', 'Criado em'],
-      r.results.map((x) => [x.id, x.data, oleoPorId(x.tipo)?.nome || x.tipo, x.ct, x.concentracao, x.ph, x.reposicao, x.preco, +(x.reposicao * x.preco).toFixed(2), x.turno, x.responsavel, DEPARTAMENTOS[x.departamento]?.nome, x.criado_em]));
+      ['ID', 'Data', 'Óleo', 'CT', 'Concentração (%)', 'pH', 'Reposição (L)', 'Preço (R$/L)', 'Custo (R$)', 'Turno', 'Responsável', 'Departamento', 'Seção', 'Criado em'],
+      r.results.map((x) => [x.id, x.data, oleoPorId(x.tipo)?.nome || x.tipo, x.ct, x.concentracao, x.ph, x.reposicao, x.preco, +(x.reposicao * x.preco).toFixed(2), x.turno, x.responsavel, DEPARTAMENTOS[x.departamento]?.nome, SECOES[x.secao] || '', x.criado_em]));
   }
   if (m === 'GET' && p === '/api/exportar/cf.csv') {
     const f = filtros(url, ['descricao', 'produto', 'observacoes', 'responsavel'], u);
     const r = await env.DB.prepare(`SELECT * FROM registros_cf WHERE ${f.where.join(' AND ')} ORDER BY data, id`).bind(...f.args).all();
     return csv(`central-de-fluidos-${f.dep}.csv`,
-      ['ID', 'Data', 'Turno', 'pH', 'Concentração (%)', 'Produto', 'Descrição', 'Consumo', 'Preço (R$)', 'Custo (R$)', 'Observações', 'Responsável', 'Departamento', 'Criado em'],
-      r.results.map((x) => [x.id, x.data, x.turno, x.ph, x.concentracao, x.produto, x.descricao, x.consumo, x.preco, +(x.consumo * x.preco).toFixed(2), x.observacoes, x.responsavel, DEPARTAMENTOS[x.departamento]?.nome, x.criado_em]));
+      ['ID', 'Data', 'Turno', 'pH', 'Concentração (%)', 'Produto', 'Descrição', 'Consumo', 'Preço (R$)', 'Custo (R$)', 'Observações', 'Responsável', 'Departamento', 'Seção', 'Criado em'],
+      r.results.map((x) => [x.id, x.data, x.turno, x.ph, x.concentracao, x.produto, x.descricao, x.consumo, x.preco, +(x.consumo * x.preco).toFixed(2), x.observacoes, x.responsavel, DEPARTAMENTOS[x.departamento]?.nome, SECOES[x.secao] || '', x.criado_em]));
   }
 
   falha(404, 'Rota não encontrada.');
@@ -517,6 +530,8 @@ async function admin(req, env, seg, m, eu) {
     if (!Array.isArray(registros) || !registros.length || registros.length > 200) falha(400, 'Envie de 1 a 200 registros por vez.');
     const nulo = (v) => (v == null || v === '' ? null : num(v));
     const erros = [], stmts = [];
+    const TIPO = Object.fromEntries(OLEOS.map((o) => [o.id, o.tipo]));
+    const secaoCT = seg[1] === 'mi' ? new Map((await env.DB.prepare('SELECT ct, tipo, departamento FROM cts').all()).results.map((c) => [c.ct + '|' + c.tipo, c.departamento])) : null;
     registros.forEach((r, i) => {
       try {
         const origem = texto(r.origem, 60); if (!origem) throw 'sem ID de origem';
@@ -528,15 +543,17 @@ async function admin(req, env, seg, m, eu) {
           if (!oleoPorId(r.tipo)) throw 'óleo inválido';
           const ct = texto(r.ct, 30); if (!ct) throw 'CT vazio';
           const v = { concentracao: nulo(r.concentracao), ph: nulo(r.ph), reposicao: nulo(r.reposicao) ?? 0, preco: nulo(r.preco) ?? 0 }; nums(v);
-          stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO registros_mi (origem, tipo, departamento, data, ct, concentracao, ph, reposicao, preco, turno, responsavel, criado_em)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(origem, r.tipo, dep, dt, ct, v.concentracao, v.ph, v.reposicao, v.preco, texto(r.turno, 20), texto(r.responsavel, 80), criado));
+          const sc = DEPARTAMENTOS[dep].secoes.length === 1 ? DEPARTAMENTOS[dep].secoes[0] : secaoCT.get(ct + '|' + TIPO[r.tipo]) || null;
+          stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO registros_mi (origem, tipo, departamento, secao, data, ct, concentracao, ph, reposicao, preco, turno, responsavel, criado_em)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(origem, r.tipo, dep, sc, dt, ct, v.concentracao, v.ph, v.reposicao, v.preco, texto(r.turno, 20), texto(r.responsavel, 80), criado));
         } else {
           const v = { ph: nulo(r.ph), concentracao: nulo(r.concentracao), consumo: nulo(r.consumo) ?? 0, preco: nulo(r.preco) ?? 0 }; nums(v);
           if (v.ph === null || v.concentracao === null) throw 'sem pH ou concentração';
           const produto = texto(r.produto, 40), descricao = texto(r.descricao, 60);
           if (!produto || !descricao) throw 'sem produto';
-          stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO registros_cf (origem, departamento, data, turno, ph, concentracao, produto, descricao, consumo, preco, observacoes, responsavel, criado_em)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(origem, dep, dt, texto(r.turno, 20), v.ph, v.concentracao, produto, descricao, v.consumo, v.preco, texto(r.observacoes, 1000), texto(r.responsavel, 80), criado));
+          const sc = DEPARTAMENTOS[dep].secoes.length === 1 ? DEPARTAMENTOS[dep].secoes[0] : null;
+          stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO registros_cf (origem, departamento, secao, data, turno, ph, concentracao, produto, descricao, consumo, preco, observacoes, responsavel, criado_em)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(origem, dep, sc, dt, texto(r.turno, 20), v.ph, v.concentracao, produto, descricao, v.consumo, v.preco, texto(r.observacoes, 1000), texto(r.responsavel, 80), criado));
         }
       } catch (e) { erros.push({ origem: r?.origem, msg: String(e) }); }
     });

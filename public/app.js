@@ -1,4 +1,4 @@
-import { DEPARTAMENTOS as DEP, TURNOS, OLEOS, PRODUTOS_CF as PROD, CF_PH, CF_CONC, PH, oleoPorId } from './config.js';
+import { DEPARTAMENTOS as DEP, SECOES, TURNOS, OLEOS, PRODUTOS_CF as PROD, CF_PH, CF_CONC, PH, oleoPorId } from './config.js';
 
 // ---------- utilidades ----------
 const $ = (id) => document.getElementById(id);
@@ -78,6 +78,14 @@ const depDaTela = (o) => {
   const d = isAdmin() && view.dep ? view.dep : ME.dep;
   return !o || o.deps.includes(d) ? d : null;
 };
+
+// Fundidos se divide em I e II: a pessoa escolhe, e a escolha fica salva no aparelho
+const multiSecao = (dep) => DEP[dep].secoes.length > 1;
+const secaoSalva = (dep) => { const s = store.get('cd-secao-' + ME.id + '-' + dep); return DEP[dep].secoes.includes(s) ? s : ''; };
+const salvaSecao = (dep, s) => store.set('cd-secao-' + ME.id + '-' + dep, s || null);
+const secaoTela = (dep) => (multiSecao(dep) ? (DEP[dep].secoes.includes(view.secao) ? view.secao : secaoSalva(dep)) : DEP[dep].secoes[0]);
+const subtitulo = (dep, s) => DEP[dep].nome + (multiSecao(dep) && s ? ' · ' + SECOES[s].replace('Fundidos ', '') : '');
+const campoSecao = (id, dep, v) => (multiSecao(dep) ? field(id, 'Usinagem', seg(id, DEP[dep].secoes.map((x) => [x, SECOES[x]]), v)) : '');
 
 // ---------- navegação ----------
 function go(v, empilha = true) { if (empilha) pilha.push(view); view = v; app.dataset.h = ''; render(); window.scrollTo(0, 0); }
@@ -197,8 +205,9 @@ function vConta() {
 // ---------- início ----------
 function botoesDe(dep, r) {
   const c = r.cf;
-  const b = (k, nome, sub, alvo, cls = '') => `<button class="tile${cls}" style="--c:${COR[k]}" data-go='${esc(JSON.stringify(alvo))}'><b>${esc(nome)}</b><span>${sub}</span></button>`;
-  return `<div class="tiles">${b('cf', 'Central de Fluidos', c ? `Último ${quando(c.data)}` : 'Sem registros', { v: 'cf', dep }, ' wide')}${OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
+  const b = (k, nome, sub, alvo, cls = '') => `<button class="tile${cls}" style="--c:${COR[k]}" data-dep="${dep}" data-go='${esc(JSON.stringify(alvo))}'><b>${esc(nome)}</b><span>${sub}</span></button>`;
+  const esc_ = multiSecao(dep) ? `<div class="escolha" id="esc-${dep}"><span>Qual usinagem?</span>${seg('m-sec-' + dep, DEP[dep].secoes.map((x) => [x, SECOES[x]]), secaoSalva(dep))}</div>` : '';
+  return `${esc_}<div class="tiles">${b('cf', 'Central de Fluidos', c ? `Último ${quando(c.data)}` : 'Sem registros', { v: 'cf', dep }, ' wide')}${OLEOS.filter((o) => o.deps.includes(dep)).map((o) => {
     const l = r.mi[o.id];
     return b(o.id, o.nome, l ? `Último ${quando(l.data)}` : 'Sem registros', { v: 'oil', id: o.id, dep });
   }).join('')}</div>`;
@@ -211,7 +220,15 @@ async function vMenu() {
   app.innerHTML = deps.map((d, i) => `${adm ? `<h3 class="sec">${esc(DEP[d].nome)}</h3>` : ''}${botoesDe(d, res[i])}`).join('') +
     `<div class="menu2"><button class="btn ghost" data-go='{"v":"info"}'>Informações</button>${adm ? `<button class="btn ghost" data-go='{"v":"admin"}'>Admin</button>` : ''}</div>
     <button class="btn ghost sair" id="m-sair">Sair / trocar de usuário</button>`;
-  app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { const v = JSON.parse(b.dataset.go); if (v.v === 'cf') cfD = null; go(v); }));
+  app.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => {
+    const v = JSON.parse(b.dataset.go), dep = b.dataset.dep;
+    if (dep && multiSecao(dep)) {
+      v.secao = secaoSalva(dep);
+      if (!v.secao) { const e = $('esc-' + dep); e.classList.remove('pisca'); void e.offsetWidth; e.classList.add('pisca'); toast('Escolha Fundidos I ou Fundidos II primeiro'); return; }
+    }
+    if (v.v === 'cf') cfD = null; go(v);
+  }));
+  deps.filter(multiSecao).forEach((d) => $('m-sec-' + d).addEventListener('change', () => salvaSecao(d, val('m-sec-' + d))));
   $('m-sair').onclick = sair;
 }
 const foraDoDep = (nome) => {
@@ -223,15 +240,15 @@ const aviso = (D) => (D !== ME.dep ? `<div class="warn">Lançando para <b>${esc(
 // ---------- Central de Fluidos (3 etapas) ----------
 async function vCF() {
   const D = depDaTela(null);
-  titulo('Central de Fluidos', DEP[D].nome);
   const pr = await precos(D);
-  if (!cfD) cfD = { step: 1, data: CFG.hoje, turno: ME.turno, ph: '', concentracao: '', produto: '', descricao: '', consumo: '', observacoes: '' };
+  if (!cfD) cfD = { step: 1, secao: secaoTela(D), data: CFG.hoje, turno: ME.turno, ph: '', concentracao: '', produto: '', descricao: '', consumo: '', observacoes: '' };
+  titulo('Central de Fluidos', subtitulo(D, cfD.secao));
   const s = cfD.step;
   const passos = `<ol class="passos">${['Data e turno', 'Parâmetros', 'Consumo'].map((t, i) => `<li class="${i + 1 < s ? 'feito' : i + 1 === s ? 'on' : ''}"><span>${i + 1 < s ? '✓' : i + 1}</span>${t}</li>`).join('')}</ol>`;
   let body, regras;
   if (s === 1) {
-    body = `${field('c-data', 'Data', tData('c-data', cfD.data))}${field('c-tur', 'Turno', seg('c-tur', TURNOS, cfD.turno))}`;
-    regras = [['c-data', R.data], ['c-tur', R.req('O turno')]];
+    body = `${campoSecao('c-sec', D, cfD.secao)}${field('c-data', 'Data', tData('c-data', cfD.data))}${field('c-tur', 'Turno', seg('c-tur', TURNOS, cfD.turno))}`;
+    regras = [...(multiSecao(D) ? [['c-sec', R.req('A usinagem')]] : []), ['c-data', R.data], ['c-tur', R.req('O turno')]];
   } else if (s === 2) {
     body = `<div class="grid2">${field('c-ph', 'pH', tNum('c-ph', cfD.ph), 1, CF_PH.join(' a '))}${field('c-conc', 'Concentração', tNum('c-conc', cfD.concentracao, '%'), 1, CF_CONC.join(' a ') + '%')}</div>`;
     regras = [['c-ph', R.faixa('O pH', CF_PH)], ['c-conc', R.faixa('A concentração', CF_CONC)]];
@@ -248,7 +265,8 @@ async function vCF() {
   }
   app.innerHTML = passos + aviso(D) + `<div class="card pad">${body}</div>
     <div class="acoes">${s > 1 ? '<button class="btn ghost" id="prev">Voltar</button>' : `<button class="btn ghost" id="toH">Histórico</button>`}<button class="btn" id="nx">${s < 3 ? 'Continuar' : 'Enviar registro'}</button></div>`;
-  const pega = () => { for (const [k, id] of [['data', 'c-data'], ['turno', 'c-tur'], ['ph', 'c-ph'], ['concentracao', 'c-conc'], ['produto', 'c-prod'], ['descricao', 'c-desc'], ['consumo', 'c-cons'], ['observacoes', 'c-obs']]) if ($(id)) cfD[k] = $(id).value; };
+  if ($('c-sec')) $('c-sec').addEventListener('change', () => { cfD.secao = val('c-sec'); salvaSecao(D, cfD.secao); titulo('Central de Fluidos', subtitulo(D, cfD.secao)); });
+  const pega = () => { for (const [k, id] of [['secao', 'c-sec'], ['data', 'c-data'], ['turno', 'c-tur'], ['ph', 'c-ph'], ['concentracao', 'c-conc'], ['produto', 'c-prod'], ['descricao', 'c-desc'], ['consumo', 'c-cons'], ['observacoes', 'c-obs']]) if ($(id)) cfD[k] = $(id).value; };
   const custo = () => {
     if (!$('c-cost')) return;
     const p = pr[val('c-desc')], c = num(val('c-cons'));
@@ -257,15 +275,16 @@ async function vCF() {
   };
   live(regras, 'nx', custo);
   if (s === 3) { $('c-prod').addEventListener('change', () => { pega(); cfD.descricao = ''; vCF(); }); $('c-obs').oninput = pega; }
-  if ($('toH')) $('toH').onclick = () => { pega(); go({ v: 'hist', id: 'cf', dep: D }); };
+  if ($('toH')) $('toH').onclick = () => { pega(); go({ v: 'hist', id: 'cf', dep: D, sec: multiSecao(D) ? cfD.secao : '' }); };
   if (s > 1) $('prev').onclick = () => { pega(); cfD.step--; vCF(); };
   $('nx').onclick = () => {
     pega();
     if (s < 3) { cfD.step++; vCF(); window.scrollTo(0, 0); return; }
     ocupado('nx', 'Enviando…', async () => {
       await api('/api/cf', { method: 'POST', body: { ...cfD, departamento: D, responsavel: ME.nome } });
+      const sc = cfD.secao;
       cfD = null;
-      go({ v: 'ok', k: 'cf', msg: 'Central de Fluidos', novo: { v: 'cf', dep: D }, hist: { v: 'hist', id: 'cf', dep: D } });
+      go({ v: 'ok', k: 'cf', msg: 'Central de Fluidos' + (multiSecao(D) ? ' · ' + SECOES[sc] : ''), novo: { v: 'cf', dep: D, secao: sc }, hist: { v: 'hist', id: 'cf', dep: D, sec: multiSecao(D) ? sc : '' } });
     });
   };
 }
@@ -301,20 +320,27 @@ async function vOil() {
   const o = oleoPorId(view.id);
   const D = depDaTela(o);
   if (!D) { titulo(o.nome); return foraDoDep(o.nome); }
-  titulo(o.nome, DEP[D].nome);
-  const [lista, maqs] = await Promise.all([cts(D).then((l) => l.filter((c) => c.tipo === o.tipo)), maquinas(D).catch(() => [])]);
-  if (!lista.length) {
-    app.innerHTML = `<div class="empty">Nenhum CT de ${esc(o.nome)} cadastrado em ${esc(DEP[D].nome)}.<br>Peça ao admin para cadastrar.</div><div class="row mt"><button class="btn ghost" id="toH">Ver histórico</button></div>`;
-    $('toH').onclick = () => go({ v: 'hist', id: o.id, dep: D });
+  const S = secaoTela(D);
+  titulo(o.nome, subtitulo(D, S));
+  const [todos, maqs] = await Promise.all([cts(D).then((l) => l.filter((c) => c.tipo === o.tipo)), maquinas(D).catch(() => [])]);
+  const lista = todos.filter((c) => !S || c.departamento === S);
+  const escolhe = campoSecao('o-sec', D, S);
+  const hist = { v: 'hist', id: o.id, dep: D, sec: multiSecao(D) ? S : '' };
+  const ligaSecao = () => { if ($('o-sec')) $('o-sec').addEventListener('change', () => { salvaSecao(D, val('o-sec')); view.secao = val('o-sec'); vOil(); }); };
+  if (!S || !lista.length) {
+    app.innerHTML = (escolhe ? `<div class="card pad">${escolhe}</div>` : '') + `<div class="empty mt2">${!S ? 'Escolha acima se é Fundidos I ou Fundidos II.' : `Nenhum CT de ${esc(o.nome)} cadastrado em ${esc(multiSecao(D) ? SECOES[S] : DEP[D].nome)}.<br>Peça ao admin para cadastrar.`}</div><div class="row mt"><button class="btn ghost" id="toH">Ver histórico</button></div>`;
+    $('toH').onclick = () => go(hist);
+    ligaSecao();
     return;
   }
-  app.innerHTML = aviso(D) + `<div class="card pad">${oilCampos(o, lista, null, maqs)}</div>
+  app.innerHTML = aviso(D) + `<div class="card pad">${escolhe}${oilCampos(o, lista, null, maqs)}</div>
     <div class="acoes"><button class="btn ghost" id="toH">Histórico</button><button class="btn" id="send">Enviar registro</button></div>`;
+  ligaSecao();
   live(oilRegras(o), 'send', oilCusto(lista, null, maqs));
-  $('toH').onclick = () => go({ v: 'hist', id: o.id, dep: D });
+  $('toH').onclick = () => go(hist);
   $('send').onclick = () => ocupado('send', 'Enviando…', async () => {
-    await api('/api/mi', { method: 'POST', body: { ...oilLe(o), tipo: o.id, departamento: D, turno: ME.turno, responsavel: ME.nome } });
-    go({ v: 'ok', k: o.id, msg: o.nome, novo: { v: 'oil', id: o.id, dep: D }, hist: { v: 'hist', id: o.id, dep: D } });
+    await api('/api/mi', { method: 'POST', body: { ...oilLe(o), tipo: o.id, departamento: D, secao: S, turno: ME.turno, responsavel: ME.nome } });
+    go({ v: 'ok', k: o.id, msg: o.nome + (multiSecao(D) ? ' · ' + SECOES[S] : ''), novo: { v: 'oil', id: o.id, dep: D, secao: S }, hist });
   });
 }
 
@@ -336,6 +362,7 @@ function histDep() {
 function histQuery() {
   const p = new URLSearchParams({ dep: histDep() });
   if (view.id !== 'cf') p.set('tipo', view.id);
+  if (view.sec && multiSecao(histDep())) p.set('secao', view.sec);
   const per = view.per ?? '30';
   if (per) p.set('de', diasAtras(+per));
   if (view.q) p.set('q', view.q);
@@ -345,17 +372,20 @@ async function vHist() {
   const isCF = view.id === 'cf', o = isCF ? null : oleoPorId(view.id);
   if (o && !depDaTela(o)) { titulo(o.nome); return foraDoDep(o.nome); }
   const D = histDep();
-  titulo('Histórico · ' + (isCF ? 'Central de Fluidos' : o.nome), DEP[D].nome);
+  const ms = multiSecao(D);
+  titulo('Histórico · ' + (isCF ? 'Central de Fluidos' : o.nome), subtitulo(D, view.sec));
   if (app.dataset.h !== view.id + D || !$('hq')) {
     app.dataset.h = view.id + D;
     app.innerHTML = `<div class="filt">${field('hq', 'Buscar', `<input id="hq" autocomplete="off" placeholder="${isCF ? 'Produto, observação ou nome' : 'CT ou nome'}" value="${esc(view.q || '')}">`, 0)}${field('hp', 'Período', seg('hp', PERIODOS, view.per ?? '30'), 0)}</div>
+      ${ms ? field('hs', 'Usinagem', seg('hs', [['', 'Todas'], ...DEP[D].secoes.map((x) => [x, SECOES[x]])], view.sec || ''), 0) : ''}
       <div id="hres"><div class="load">Carregando…</div></div>
       <div class="acoes"><button class="btn ghost" id="ex">Exportar Excel</button><button class="btn" id="nv">Novo registro</button></div>
       <p class="tag">Toque em um registro para editar ou excluir. Mostra até 200 registros; a exportação traz todos do período.</p>`;
     let t;
     $('hq').oninput = () => { clearTimeout(t); t = setTimeout(() => { view.q = val('hq').trim(); lista(); }, 300); };
     $('hp').onchange = () => { view.per = val('hp'); lista(); };
-    $('nv').onclick = () => { if (isCF) cfD = null; go(isCF ? { v: 'cf', dep: D } : { v: 'oil', id: o.id, dep: D }); };
+    if ($('hs')) $('hs').onchange = () => { view.sec = val('hs'); titulo('Histórico · ' + (isCF ? 'Central de Fluidos' : o.nome), subtitulo(D, view.sec)); lista(); };
+    $('nv').onclick = () => { if (isCF) cfD = null; const sc = view.sec || undefined; go(isCF ? { v: 'cf', dep: D, secao: sc } : { v: 'oil', id: o.id, dep: D, secao: sc }); };
     $('ex').onclick = () => baixar(`/api/exportar/${isCF ? 'cf' : 'mi'}.csv?` + histQuery(), `${isCF ? 'central-de-fluidos' : 'oleo-' + o.id}-${D}-${CFG.hoje}.csv`);
   }
   await lista();
@@ -367,14 +397,17 @@ async function vHist() {
     const t = d.totais;
     const sum = `<div class="kpis"><div><small>Registros</small><b>${t.n.toLocaleString('pt-BR')}</b></div>${isCF ? '' : `<div><small>Reposição</small><b>${fmt(t.litros, 0)} L</b></div>`}<div><small>Custo</small><b>${brl(t.custo)}</b></div></div>`;
     if (!d.registros.length) { box.innerHTML = sum + '<div class="empty">Nenhum registro neste período.</div>'; return; }
-    const cab = isCF ? ['Data', 'Turno', 'pH', 'Conc.', 'Produto', 'Consumo', 'Custo', 'Responsável', 'Obs.'] : ['Data', 'CT', ...(o.conc ? ['Conc.'] : []), ...(o.ph ? ['pH'] : []), 'Reposição', 'Turno', 'Custo', 'Responsável'];
-    const lin = (r) => isCF
+    const nS = (r) => SECOES[r.secao] || '—';
+    const cab0 = isCF ? ['Data', 'Turno', 'pH', 'Conc.', 'Produto', 'Consumo', 'Custo', 'Responsável', 'Obs.'] : ['Data', 'CT', ...(o.conc ? ['Conc.'] : []), ...(o.ph ? ['pH'] : []), 'Reposição', 'Turno', 'Custo', 'Responsável'];
+    const cab = ms ? [cab0[0], 'Usinagem', ...cab0.slice(1)] : cab0;
+    const lin0 = (r) => isCF
       ? [br(r.data), r.turno || '—', fmt(r.ph, 1), fmt(r.concentracao, 1) + '%', r.descricao, fmt(r.consumo, 0) + ' ' + (PROD[r.produto]?.un || ''), r.preco > 0 ? brl(r.consumo * r.preco) : '—', r.responsavel, r.observacoes]
       : [br(r.data), r.ct, ...(o.conc ? [r.concentracao != null ? fmt(r.concentracao, 1) + '%' : '—'] : []), ...(o.ph ? [r.ph != null ? fmt(r.ph, 1) : '—'] : []), fmt(r.reposicao, 0) + ' L', r.turno || '—', r.preco > 0 ? brl(r.reposicao * r.preco) : '—', r.responsavel];
+    const lin = (r) => { const l = lin0(r); return ms ? [l[0], nS(r), ...l.slice(1)] : l; };
     const tab = `<div class="card tabela"><table><thead><tr>${cab.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${d.registros.map((r) => `<tr data-id="${r.id}" tabindex="0">${lin(r).map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
     const itens = `<div class="card lista regs">${d.registros.map((r) => isCF
-      ? `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)}${r.turno ? ' · ' + esc(r.turno) : ''}</span><span>${esc(r.descricao)} ${fmt(r.consumo, 0)}</span></div><div class="v"><span>pH <b>${fmt(r.ph, 1)}</b></span><span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span><span>${esc(r.responsavel)}</span>${r.observacoes ? `<span>“${esc(r.observacoes)}”</span>` : ''}</div></button>`
-      : `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · CT ${esc(r.ct)}</span><span>${fmt(r.reposicao, 0)} L</span></div><div class="v">${r.concentracao != null ? `<span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span>` : ''}${r.ph != null ? `<span>pH <b>${fmt(r.ph, 1)}</b></span>` : ''}<span>${esc(r.turno || 'sem turno')}</span><span>${esc(r.responsavel)}</span></div></button>`).join('')}</div>`;
+      ? `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)}${r.turno ? ' · ' + esc(r.turno) : ''}</span><span>${esc(r.descricao)} ${fmt(r.consumo, 0)}</span></div><div class="v">${ms ? `<span><b>${esc(nS(r))}</b></span>` : ''}<span>pH <b>${fmt(r.ph, 1)}</b></span><span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span><span>${esc(r.responsavel)}</span>${r.observacoes ? `<span>“${esc(r.observacoes)}”</span>` : ''}</div></button>`
+      : `<button class="item" data-id="${r.id}"><div class="h"><span>${br(r.data)} · CT ${esc(r.ct)}</span><span>${fmt(r.reposicao, 0)} L</span></div><div class="v">${ms ? `<span><b>${esc(nS(r))}</b></span>` : ''}${r.concentracao != null ? `<span>Conc. <b>${fmt(r.concentracao, 1)}%</b></span>` : ''}${r.ph != null ? `<span>pH <b>${fmt(r.ph, 1)}</b></span>` : ''}<span>${esc(r.turno || 'sem turno')}</span><span>${esc(r.responsavel)}</span></div></button>`).join('')}</div>`;
     box.innerHTML = sum + tab + itens;
     const abre = (id) => { const r = d.registros.find((x) => x.id === +id); isCF ? editaCF(r, lista) : editaOleo(o, r, lista); };
     box.querySelectorAll('[data-id]').forEach((b) => { b.onclick = () => abre(b.dataset.id); if (b.tagName === 'TR') b.onkeydown = (e) => { if (e.key === 'Enter') abre(b.dataset.id); }; });
@@ -397,7 +430,7 @@ async function salvaFolha(fn) {
   try { await fn(); } catch (e) { $('sh-msg').textContent = e.message; b.disabled = false; b.textContent = 'Salvar'; }
 }
 async function editaOleo(o, r, recarrega) {
-  const [lista, maqs] = await Promise.all([cts(r.departamento).then((l) => l.filter((c) => c.tipo === o.tipo)), maquinas(r.departamento).catch(() => [])]);
+  const [lista, maqs] = await Promise.all([cts(r.departamento).then((l) => l.filter((c) => c.tipo === o.tipo && (!r.secao || c.departamento === r.secao))), maquinas(r.departamento).catch(() => [])]);
   folha('Editar registro', `<p class="hint" style="margin-top:0">Lançado por ${esc(r.responsavel)}${r.alterado_em ? ' · já editado' : ''}</p>` + oilCampos(o, lista, r, maqs) + rodapeEdicao, () => {
     live(oilRegras(o), 'sv', oilCusto(lista, r, maqs));
     $('sv').onclick = () => salvaFolha(async () => {
@@ -411,10 +444,10 @@ function editaCF(r, recarrega) {
   const dk = r.departamento;
   const descs = (p) => (p ? PROD[p][dk].concat(p === r.produto && !PROD[p][dk].includes(r.descricao) ? [r.descricao] : []) : []);
   folha('Editar registro da Central', `<p class="hint" style="margin-top:0">Lançado por ${esc(r.responsavel)}${r.alterado_em ? ' · já editado' : ''}</p>
-    <div class="grid2">${field('e-data', 'Data', tData('e-data', r.data))}${field('e-tur', 'Turno', sel('e-tur', TURNOS, r.turno))}${field('e-ph', 'pH', tNum('e-ph', r.ph), 1, CF_PH.join(' a '))}${field('e-conc', 'Concentração', tNum('e-conc', r.concentracao, '%'), 1, CF_CONC.join(' a ') + '%')}</div>
+    ${campoSecao('e-sec', dk, r.secao)}<div class="grid2">${field('e-data', 'Data', tData('e-data', r.data))}${field('e-tur', 'Turno', sel('e-tur', TURNOS, r.turno))}${field('e-ph', 'pH', tNum('e-ph', r.ph), 1, CF_PH.join(' a '))}${field('e-conc', 'Concentração', tNum('e-conc', r.concentracao, '%'), 1, CF_CONC.join(' a ') + '%')}</div>
     ${field('e-prod', 'Produto', seg('e-prod', Object.keys(PROD).map((p) => [p, p.replace(/ \(.*\)$/, '')]), r.produto))}<div id="e-desc-box">${field('e-desc', 'Qual?', seg('e-desc', descs(r.produto), r.descricao))}</div>
     ${field('e-cons', 'Consumo', tNum('e-cons', r.consumo, PROD[r.produto]?.un || ''))}${field('e-obs', 'Observações', `<textarea id="e-obs" maxlength="1000">${esc(r.observacoes)}</textarea>`, 0)}` + rodapeEdicao, () => {
-    const regras = [['e-data', R.data], ['e-tur', R.req('O turno')], ['e-ph', R.faixa('O pH', CF_PH)], ['e-conc', R.faixa('A concentração', CF_CONC)], ['e-prod', R.req('O produto')], ['e-desc', R.req('A descrição')], ['e-cons', R.pos('O consumo')]];
+    const regras = [...(multiSecao(dk) ? [['e-sec', R.req('A usinagem')]] : []), ['e-data', R.data], ['e-tur', R.req('O turno')], ['e-ph', R.faixa('O pH', CF_PH)], ['e-conc', R.faixa('A concentração', CF_CONC)], ['e-prod', R.req('O produto')], ['e-desc', R.req('A descrição')], ['e-cons', R.pos('O consumo')]];
     const run = live(regras, 'sv');
     $('e-prod').addEventListener('change', () => {
       const ds = descs(val('e-prod'));
@@ -423,7 +456,7 @@ function editaCF(r, recarrega) {
       run();
     });
     $('sv').onclick = () => salvaFolha(async () => {
-      await api('/api/cf/' + r.id, { method: 'PUT', body: { data: val('e-data'), turno: val('e-tur'), ph: val('e-ph'), concentracao: val('e-conc'), produto: val('e-prod'), descricao: val('e-desc'), consumo: val('e-cons'), observacoes: val('e-obs') } });
+      await api('/api/cf/' + r.id, { method: 'PUT', body: { secao: val('e-sec') || undefined, data: val('e-data'), turno: val('e-tur'), ph: val('e-ph'), concentracao: val('e-conc'), produto: val('e-prod'), descricao: val('e-desc'), consumo: val('e-cons'), observacoes: val('e-obs') } });
       layer.innerHTML = ''; recarrega(); toast('Registro atualizado');
     });
     $('dl').onclick = () => confirmaExclusao(`${br(r.data)} · ${esc(r.descricao)} · ${fmt(r.consumo, 0)}`, '/api/cf/' + r.id, recarrega);

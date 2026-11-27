@@ -6,6 +6,9 @@ export const DEPARTAMENTOS = {
   Fundidos: { nome: 'Usinagem de Fundidos', secoes: ['Usinagem_de_Fundidos_I', 'Usinagem_de_Fundidos_II'] },
 };
 
+// Nome curto de cada seção (Fundidos se divide em I e II)
+export const SECOES = { Usinagem_de_Eixos: 'Eixos', Usinagem_de_Fundidos_I: 'Fundidos I', Usinagem_de_Fundidos_II: 'Fundidos II' };
+
 export const TURNOS = ['1° Turno', '2° Turno', '3° Turno', 'Turno Normal'];
 
 // Óleos das máquinas individuais.
